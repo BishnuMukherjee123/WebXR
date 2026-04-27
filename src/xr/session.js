@@ -1,11 +1,24 @@
 export async function startXRSession(renderer) {
-  const session = await navigator.xr.requestSession("immersive-ar", {
-    requiredFeatures: ["hit-test", "dom-overlay"],
-    optionalFeatures: ["dom-overlay-for-handheld-ar"],
-    domOverlay: { root: document.getElementById("ui-overlay") || document.body },
-  });
+  console.log("📱 Requesting immersive-ar session...");
+  
+  if (!renderer.xr.enabled) {
+    throw new Error("XR not enabled on renderer");
+  }
 
-  renderer.xr.setSession(session);
+  try {
+    const session = await navigator.xr.requestSession("immersive-ar", {
+      requiredFeatures: ["hit-test"],
+      optionalFeatures: ["dom-overlay"],
+      domOverlay: { root: document.body },
+    });
 
-  return session;
+    console.log("📱 Session created successfully");
+    renderer.xr.setSession(session);
+    console.log("📱 Session attached to renderer");
+
+    return session;
+  } catch (err) {
+    console.error("📱 Session request error:", err);
+    throw err;
+  }
 }

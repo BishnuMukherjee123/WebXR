@@ -20,16 +20,27 @@ export default function ARScene() {
     let placedObjects = [];
 
     const init = async () => {
+      console.log("🔍 ARScene init starting...");
+      
       // 🧠 Check support
       if (!navigator.xr) {
+        console.error("❌ navigator.xr not available");
         alert("WebXR not supported");
         return;
       }
 
-      const supported = await navigator.xr.isSessionSupported("immersive-ar");
-      if (!supported) {
-        alert("AR not supported on this device");
-        return;
+      console.log("✅ navigator.xr exists");
+
+      try {
+        const supported = await navigator.xr.isSessionSupported("immersive-ar");
+        console.log("AR support check:", supported);
+        
+        if (!supported) {
+          alert("AR not supported on this device");
+          return;
+        }
+      } catch (err) {
+        console.error("❌ Error checking AR support:", err);
       }
 
       // 🎬 Scene setup
@@ -78,14 +89,28 @@ export default function ARScene() {
       // 🚀 Expose start function globally (for React button)
       window.startAR = async () => {
         try {
+          console.log("🚀 Starting AR session...");
           session = await startXRSession(renderer);
-          console.log("✅ XR session started");
+          console.log("✅ XR session started", session);
 
+          console.log("🔍 Setting up hit test...");
           hitTestSource = await setupHitTest(session);
-          console.log("✅ hit-test ready");
+          console.log("✅ hit-test ready", hitTestSource);
+          
+          // Listen for session end
+          session.addEventListener("end", () => {
+            console.log("⛔ XR session ended");
+            session = null;
+            hitTestSource = null;
+          });
         } catch (err) {
           console.error("❌ AR start failed:", err);
-          alert(err.message);
+          console.error("Error details:", {
+            name: err.name,
+            message: err.message,
+            stack: err.stack
+          });
+          alert("AR Error: " + err.message);
         }
       };
 
