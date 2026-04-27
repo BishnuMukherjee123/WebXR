@@ -88,6 +88,11 @@ export default function ARScene() {
 
       // 🚀 Expose start function globally (for React button)
       window.startAR = async () => {
+        if (session) {
+          console.log("⚠️ AR already running");
+          return;
+        }
+
         try {
           console.log("🚀 Starting AR session...");
           session = await startXRSession(renderer);
@@ -123,17 +128,23 @@ export default function ARScene() {
       // 🔁 Render loop
       renderer.setAnimationLoop((time, frame) => {
         if (frame && hitTestSource && session) {
-          const referenceSpace = renderer.xr.getReferenceSpace();
-          const hits = frame.getHitTestResults(hitTestSource);
+          try {
+            const referenceSpace = renderer.xr.getReferenceSpace();
+            const hits = frame.getHitTestResults(hitTestSource);
 
-          if (hits.length > 0) {
-            const pose = hits[0].getPose(referenceSpace);
+            if (hits.length > 0) {
+              const pose = hits[0].getPose(referenceSpace);
 
-            reticle.visible = true;
-            reticle.matrix.fromArray(pose.transform.matrix);
-          } else {
-            reticle.visible = false;
+              reticle.visible = true;
+              reticle.matrix.fromArray(pose.transform.matrix);
+            } else {
+              reticle.visible = false;
+            }
+          } catch (err) {
+            console.error("❌ Hit test error:", err);
           }
+        } else if (!frame) {
+          // console.log("⏳ Waiting for XR frame...");
         }
 
         renderer.render(scene, camera);

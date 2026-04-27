@@ -19,9 +19,15 @@
   color: white;
 }
 
-.start-btn:hover {
+.start-btn:hover:not(:disabled) {
   background: #00aa33;
   transform: translateX(-50%) scale(1.05);
+}
+
+.start-btn:disabled {
+  background: #0088ff;
+  cursor: not-allowed;
+  opacity: 0.9;
 }
 
 /* Reset button */

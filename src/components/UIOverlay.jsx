@@ -1,18 +1,36 @@
+import { useState } from "react";
 import "../styles/ar.css";
 
 export default function UIOverlay() {
+  const [arStarted, setArStarted] = useState(false);
+
+  const handleStartAR = () => {
+    if (!arStarted && window.startAR) {
+      console.log("🎮 Start AR clicked");
+      setArStarted(true);
+      window.startAR();
+    }
+  };
+
+  const handleReset = () => {
+    if (window.resetAR) {
+      window.resetAR();
+    }
+  };
+
   return (
     <>
       <button
         className="overlay-btn start-btn"
-        onClick={() => window.startAR && window.startAR()}
+        onClick={handleStartAR}
+        disabled={arStarted}
       >
-        Start AR
+        {arStarted ? "AR Running..." : "Start AR"}
       </button>
 
       <button
         className="overlay-btn reset-btn"
-        onClick={() => window.resetAR && window.resetAR()}
+        onClick={handleReset}
       >
         Reset
       </button>
