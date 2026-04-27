@@ -4,15 +4,15 @@ export default function UIOverlay() {
   return (
     <>
       <button
-        className="overlay-btn"
-        onClick={() => window.startAR()}
+        className="overlay-btn start-btn"
+        onClick={() => window.startAR && window.startAR()}
       >
         Start AR
       </button>
 
       <button
-        className="overlay-btn"
-        onClick={() => window.resetAR()}
+        className="overlay-btn reset-btn"
+        onClick={() => window.resetAR && window.resetAR()}
       >
         Reset
       </button>

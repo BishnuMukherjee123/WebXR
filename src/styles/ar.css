@@ -1,10 +1,41 @@
 .overlay-btn {
   position: fixed;
+  z-index: 999;
+  padding: 12px 20px;
+  border: none;
+  border-radius: 8px;
+  font-size: 16px;
+  font-weight: bold;
+  cursor: pointer;
+  transition: all 0.3s ease;
+}
+
+/* Start button */
+.start-btn {
+  bottom: 80px;
+  left: 50%;
+  transform: translateX(-50%);
+  background: #00cc44;
+  color: white;
+}
+
+.start-btn:hover {
+  background: #00aa33;
+  transform: translateX(-50%) scale(1.05);
+}
+
+/* Reset button */
+.reset-btn {
   bottom: 20px;
   left: 50%;
   transform: translateX(-50%);
-  z-index: 999;
-  padding: 12px 20px;
+  background: #888888;
+  color: white;
+}
+
+.reset-btn:hover {
+  background: #666666;
+  transform: translateX(-50%) scale(1.05);
 }
 
 .overlay-text {
@@ -14,4 +45,7 @@
   transform: translateX(-50%);
   color: white;
   z-index: 999;
+  font-size: 14px;
+  text-shadow: 0 2px 4px rgba(0, 0, 0, 0.7);
+  font-weight: 500;
 }
