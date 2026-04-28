@@ -76,61 +76,41 @@ export default function ARScene() {
     }, undefined, (e) => console.error("❌ GLB:", e));
 
     let placedModel = null;
-    let placedAnchor = null;
-    let lastHitResult = null;
-
-    // Pre-alloc scratch objects used for math (avoids GC per frame)
-    const _hitPos  = new THREE.Vector3();
-    const _hitQuat = new THREE.Quaternion();
-    const _hitScl  = new THREE.Vector3();
-    const _hitMat  = new THREE.Matrix4();
 
     const controller = renderer.xr.getController(0);
-    controller.addEventListener("select", async () => {
+    controller.addEventListener("select", () => {
       if (!model) { console.warn("⚠️ Model not loaded"); return; }
 
-      // Remove previous model and anchor
+      // Remove previous model
       if (placedModel) { scene.remove(placedModel); placedModel = null; }
-      if (placedAnchor) { placedAnchor.delete(); placedAnchor = null; }
 
       const clone = skeletonClone(model);
       const s = model.userData.s ?? 1;
 
-      // Keep matrixAutoUpdate = true so Three.js applies our position/quaternion lerping
+      // Ensure the model updates its matrix based on our initial placement
       clone.scale.set(s, s, s);
       clone.traverse((c) => {
         if (c.isMesh) c.frustumCulled = false;
       });
 
-      if (reticle.visible && lastHitResult) {
-        // ── Primary path: Create an XR Anchor at the hit-test point ───
-        try {
-          const anchor = await lastHitResult.createAnchor();
-          placedAnchor = anchor;
-          
-          // Initial snap so it appears instantly at the reticle position
-          _hitMat.copy(reticle.matrix);
-          _hitMat.decompose(_hitPos, _hitQuat, _hitScl);
-          clone.position.copy(_hitPos);
-          clone.quaternion.copy(_hitQuat);
-          console.log("⚓ Anchor created — model is world-locked (with smoothing)");
-        } catch (e) {
-          console.warn("⚠️ Anchors not supported, falling back to static", e.message);
-          _hitMat.copy(reticle.matrix);
-          _hitMat.decompose(_hitPos, _hitQuat, _hitScl);
-          clone.position.copy(_hitPos);
-          clone.quaternion.copy(_hitQuat);
-        }
+      if (reticle.visible) {
+        // ── Primary path: place exactly at the detected surface ───
+        // We do not use XR Anchors here because anchors update every frame 
+        // as ARCore refines its SLAM map, which causes visual trembling.
+        // By just reading the reticle matrix once, the object is mathematically 
+        // frozen in the virtual room.
+        clone.position.setFromMatrixPosition(reticle.matrix);
+        clone.quaternion.setFromRotationMatrix(reticle.matrix);
+        console.log("✅ Placed on surface (frozen)");
       } else {
         // ── Fallback: 1.2 m in front of the XR camera ─────────────
         const xrCam = renderer.xr.getCamera();
-        _hitPos.setFromMatrixPosition(xrCam.matrixWorld);
-        xrCam.getWorldDirection(_hitQuat.set(0,0,0,1)); // reuse vec temporarily
-        _hitPos.addScaledVector(
-          new THREE.Vector3().setFromMatrixColumn(xrCam.matrixWorld, 2).negate(),
-          1.2
-        );
-        clone.position.copy(_hitPos);
+        clone.position.setFromMatrixPosition(xrCam.matrixWorld);
+        
+        const camDir = new THREE.Vector3(0, 0, -1);
+        camDir.transformDirection(xrCam.matrixWorld);
+        clone.position.addScaledVector(camDir, 1.2);
+        
         clone.quaternion.setFromRotationMatrix(xrCam.matrixWorld);
         console.warn("⚠️ No surface — placed 1.2m in front of camera");
       }
@@ -143,7 +123,7 @@ export default function ARScene() {
     // ── AR Button ────────────────────────────────────────────────
     const btn = ARButton.createButton(renderer, {
       requiredFeatures: ["hit-test"],
-      optionalFeatures: ["dom-overlay", "anchors"], // Need anchors for drift correction
+      optionalFeatures: ["dom-overlay"],
       domOverlay: { root: overlay },
     });
     document.body.appendChild(btn);
@@ -154,8 +134,6 @@ export default function ARScene() {
       hitTestSource = null;
       hitTestSourceRequested = false;
       reticle.visible = false;
-      lastHitResult = null;
-      if (placedAnchor) { placedAnchor.delete(); placedAnchor = null; }
       setInSession(false);
     });
 
@@ -190,30 +168,11 @@ export default function ARScene() {
             const pose = results[0].getPose(refSpace);
             reticle.visible = true;
             reticle.matrix.fromArray(pose.transform.matrix);
-            lastHitResult = results[0];
           } else {
             reticle.visible = false;
-            lastHitResult = null;
           }
         }
-
-        // ── Smooth Anchor Interpolation (Lerp/Slerp) ────────────────
-        // ARCore refines its SLAM map continually. If we snap directly to the 
-        // anchor pose every frame, the model jitters. Instead, we use linear 
-        // interpolation (lerp) to smoothly glide the model to the target anchor 
-        // position, making it feel rock-solid.
-        if (placedAnchor && placedModel && frame.trackedAnchors?.has(placedAnchor)) {
-          const anchorPose = frame.getPose(placedAnchor.anchorSpace, refSpace);
-          if (anchorPose) {
-            _hitMat.fromArray(anchorPose.transform.matrix);
-            _hitMat.decompose(_hitPos, _hitQuat, _hitScl);
-
-            // Interpolate position (10% toward target per frame)
-            placedModel.position.lerp(_hitPos, 0.1);
-            // Interpolate rotation (10% toward target per frame)
-            placedModel.quaternion.slerp(_hitQuat, 0.1);
-          }
-        }
+        // No per-frame model updates. The model is 100% static in local-floor space.
       }
       renderer.render(scene, camera);
     });
@@ -231,9 +190,7 @@ export default function ARScene() {
       [...scene.children]
         .filter((o) => o !== reticle && o !== controller && !o.isLight)
         .forEach((o) => scene.remove(o));
-      if (placedAnchor) { placedAnchor.delete(); placedAnchor = null; }
       placedModel = null;
-      lastHitResult = null;
       reticle.visible = false;
     };
 
