@@ -38,11 +38,21 @@ export default function ARScene() {
     );
 
     // ── Renderer ──────────────────────────────────────────────────
-    // alpha:true — canvas is transparent so camera feed shows through
-    const renderer = new THREE.WebGLRenderer({ antialias: true, alpha: true });
+    // alpha:true + premultipliedAlpha:false → required for AR camera passthrough
+    const renderer = new THREE.WebGLRenderer({
+      antialias: true,
+      alpha: true,
+      premultipliedAlpha: false, // required on Android Chrome for correct AR transparency
+    });
     renderer.setPixelRatio(window.devicePixelRatio);
     renderer.setSize(window.innerWidth, window.innerHeight);
-    // Required for correct PBR/GLB rendering (avoids black models)
+
+    // ✅ CRITICAL: set clear color alpha=0 so the XR compositor can show
+    //    the camera feed THROUGH the canvas. Without this the canvas
+    //    renders opaque black even though alpha:true is set.
+    renderer.setClearColor(0x000000, 0);
+
+    // Required for correct PBR/GLB rendering (avoids pitch-black models)
     renderer.outputColorSpace = THREE.SRGBColorSpace;
     renderer.toneMapping = THREE.ACESFilmicToneMapping;
     renderer.toneMappingExposure = 1.5;
