@@ -75,58 +75,52 @@ export default function ARScene() {
       });
     }, undefined, (e) => console.error("❌ GLB:", e));
 
-    // ── Controller — tap to place ─────────────────────────────────
-    // Strategy: PLACE ONCE, FREEZE FOREVER.
-    //
-    // XR Anchors were removed because anchor.getPose() is called every frame
-    // WHILE ARCore is still converging its SLAM map. During those first
-    // seconds the anchor pose itself drifts, causing the model to visibly move.
-    //
-    // The correct approach:
-    //   1. On tap, read the hit-test pose for that exact frame
-    //   2. Build the model matrix from it ONCE
-    //   3. Set matrixAutoUpdate = false  →  Three.js never rebuilds the matrix
-    //   4. Never write to the matrix again
-    //
-    // Result: model is frozen in WebGL world-space. The XR camera tracks the
-    // real camera pose every frame, so as you move the phone the model
-    // correctly appears anchored to the surface.
     let placedModel = null;
-    // Pre-alloc scratch objects used at placement time (not per-frame)
+    let placedAnchor = null;
+    let lastHitResult = null;
+
+    // Pre-alloc scratch objects used for math (avoids GC per frame)
     const _hitPos  = new THREE.Vector3();
     const _hitQuat = new THREE.Quaternion();
     const _hitScl  = new THREE.Vector3();
     const _hitMat  = new THREE.Matrix4();
-    const _hitScaleVec = new THREE.Vector3();
 
     const controller = renderer.xr.getController(0);
-    controller.addEventListener("select", () => {
+    controller.addEventListener("select", async () => {
       if (!model) { console.warn("⚠️ Model not loaded"); return; }
 
-      // Remove previous model
+      // Remove previous model and anchor
       if (placedModel) { scene.remove(placedModel); placedModel = null; }
+      if (placedAnchor) { placedAnchor.delete(); placedAnchor = null; }
 
       const clone = skeletonClone(model);
       const s = model.userData.s ?? 1;
 
-      // Disable Three.js auto-matrix rebuild — we own the matrix from here
-      clone.matrixAutoUpdate = false;
+      // Keep matrixAutoUpdate = true so Three.js applies our position/quaternion lerping
+      clone.scale.set(s, s, s);
       clone.traverse((c) => {
-        c.matrixAutoUpdate = false;
         if (c.isMesh) c.frustumCulled = false;
       });
 
-      if (reticle.visible) {
-        // ── Primary path: place exactly at the detected surface ───
-        // reticle.matrix is already the hit-test pose for this frame
-        // (set just before this select event fires in the XR pipeline).
-        // Decompose → re-compose with user scale so we never accumulate.
-        _hitMat.copy(reticle.matrix);
-        _hitMat.decompose(_hitPos, _hitQuat, _hitScl);
-        _hitScaleVec.set(s, s, s);
-        clone.matrix.compose(_hitPos, _hitQuat, _hitScaleVec);
-        clone.matrixWorldNeedsUpdate = true;
-        console.log("✅ Placed on surface at", _hitPos);
+      if (reticle.visible && lastHitResult) {
+        // ── Primary path: Create an XR Anchor at the hit-test point ───
+        try {
+          const anchor = await lastHitResult.createAnchor();
+          placedAnchor = anchor;
+          
+          // Initial snap so it appears instantly at the reticle position
+          _hitMat.copy(reticle.matrix);
+          _hitMat.decompose(_hitPos, _hitQuat, _hitScl);
+          clone.position.copy(_hitPos);
+          clone.quaternion.copy(_hitQuat);
+          console.log("⚓ Anchor created — model is world-locked (with smoothing)");
+        } catch (e) {
+          console.warn("⚠️ Anchors not supported, falling back to static", e.message);
+          _hitMat.copy(reticle.matrix);
+          _hitMat.decompose(_hitPos, _hitQuat, _hitScl);
+          clone.position.copy(_hitPos);
+          clone.quaternion.copy(_hitQuat);
+        }
       } else {
         // ── Fallback: 1.2 m in front of the XR camera ─────────────
         const xrCam = renderer.xr.getCamera();
@@ -136,13 +130,8 @@ export default function ARScene() {
           new THREE.Vector3().setFromMatrixColumn(xrCam.matrixWorld, 2).negate(),
           1.2
         );
-        _hitScaleVec.set(s, s, s);
-        clone.matrix.compose(
-          _hitPos,
-          new THREE.Quaternion().setFromRotationMatrix(xrCam.matrixWorld),
-          _hitScaleVec
-        );
-        clone.matrixWorldNeedsUpdate = true;
+        clone.position.copy(_hitPos);
+        clone.quaternion.setFromRotationMatrix(xrCam.matrixWorld);
         console.warn("⚠️ No surface — placed 1.2m in front of camera");
       }
 
@@ -154,7 +143,7 @@ export default function ARScene() {
     // ── AR Button ────────────────────────────────────────────────
     const btn = ARButton.createButton(renderer, {
       requiredFeatures: ["hit-test"],
-      optionalFeatures: ["dom-overlay"],
+      optionalFeatures: ["dom-overlay", "anchors"], // Need anchors for drift correction
       domOverlay: { root: overlay },
     });
     document.body.appendChild(btn);
@@ -165,6 +154,8 @@ export default function ARScene() {
       hitTestSource = null;
       hitTestSourceRequested = false;
       reticle.visible = false;
+      lastHitResult = null;
+      if (placedAnchor) { placedAnchor.delete(); placedAnchor = null; }
       setInSession(false);
     });
 
@@ -199,13 +190,30 @@ export default function ARScene() {
             const pose = results[0].getPose(refSpace);
             reticle.visible = true;
             reticle.matrix.fromArray(pose.transform.matrix);
+            lastHitResult = results[0];
           } else {
             reticle.visible = false;
+            lastHitResult = null;
           }
         }
-        // NOTE: placedModel matrix is NEVER touched here.
-        // matrixAutoUpdate=false means Three.js also never rebuilds it.
-        // The matrix is written exactly once (on tap) and stays frozen.
+
+        // ── Smooth Anchor Interpolation (Lerp/Slerp) ────────────────
+        // ARCore refines its SLAM map continually. If we snap directly to the 
+        // anchor pose every frame, the model jitters. Instead, we use linear 
+        // interpolation (lerp) to smoothly glide the model to the target anchor 
+        // position, making it feel rock-solid.
+        if (placedAnchor && placedModel && frame.trackedAnchors?.has(placedAnchor)) {
+          const anchorPose = frame.getPose(placedAnchor.anchorSpace, refSpace);
+          if (anchorPose) {
+            _hitMat.fromArray(anchorPose.transform.matrix);
+            _hitMat.decompose(_hitPos, _hitQuat, _hitScl);
+
+            // Interpolate position (10% toward target per frame)
+            placedModel.position.lerp(_hitPos, 0.1);
+            // Interpolate rotation (10% toward target per frame)
+            placedModel.quaternion.slerp(_hitQuat, 0.1);
+          }
+        }
       }
       renderer.render(scene, camera);
     });
@@ -223,7 +231,9 @@ export default function ARScene() {
       [...scene.children]
         .filter((o) => o !== reticle && o !== controller && !o.isLight)
         .forEach((o) => scene.remove(o));
+      if (placedAnchor) { placedAnchor.delete(); placedAnchor = null; }
       placedModel = null;
+      lastHitResult = null;
       reticle.visible = false;
     };
 
