@@ -227,8 +227,8 @@ export default function ARScene() {
         if (placedAnchor && placedModel && frame.trackedAnchors?.has(placedAnchor)) {
           const pose = frame.getPose(placedAnchor.anchorSpace, refSpace);
           if (pose) {
-            placedModel.position.setFromMatrixPosition(pose.transform.matrix);
-            placedModel.quaternion.setFromRotationMatrix(pose.transform.matrix);
+            placedModel.matrix.fromArray(pose.transform.matrix);
+            placedModel.matrix.decompose(placedModel.position, placedModel.quaternion, placedModel.scale);
           }
         }
       }
