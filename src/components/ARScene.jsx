@@ -68,9 +68,10 @@ export default function ARScene() {
     SceneLoader.ImportMeshAsync("", MODEL_URL, "", scene).then((result) => {
       modelRoot = result.meshes[0];
       modelRoot.scaling = new Vector3(0.35, 0.35, 0.35);
-      modelRoot.isVisible = false; // hide all children via the root mesh
+      // Use setEnabled(false) ONLY — it recursively hides the full mesh hierarchy.
+      // Do NOT also set isVisible=false, because we'd need to reset it on every tap.
       modelRoot.setEnabled(false);
-      console.log("✅ GLB Loaded");
+      console.log("✅ GLB Loaded, meshes:", result.meshes.length);
     }).catch(err => console.error("❌ GLB Load Error:", err));
 
     // ── WebXR ────────────────────────────────────────────────────────────────
@@ -147,16 +148,16 @@ export default function ARScene() {
           placedPosition = pos.clone();
           placedRotation = rot.clone();
 
-          // Place model directly at hit point
+          // Place model directly at hit point — make fully visible
           modelRoot.setEnabled(true);
+          modelRoot.isVisible = true;
+          modelRoot.getChildMeshes().forEach(m => { m.isVisible = true; });
           modelRoot.position.copyFrom(placedPosition);
 
-          // The GLTF __root__ node already has a 90-degree rotation baked in.
-          // We only apply the Y-component of the surface normal rotation so the
-          // model always stands upright and faces the right direction.
+          // Only rotate on Y axis so the model stands upright on the surface
           const euler = rot.toEulerAngles();
+          modelRoot.rotationQuaternion = null;
           modelRoot.rotation = new Vector3(0, euler.y, 0);
-          modelRoot.rotationQuaternion = null; // use euler rotation
 
           placed = true;
           reticle.isVisible = false; // hide reticle after placing
