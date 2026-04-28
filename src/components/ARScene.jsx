@@ -57,22 +57,53 @@ export default function ARScene() {
     const gltfLoader = new GLTFLoader();
     gltfLoader.setDRACOLoader(draco);
     gltfLoader.load(MODEL_URL, (gltf) => {
-      model = gltf.scene;
-      const box = new THREE.Box3().setFromObject(model);
-      const size = new THREE.Vector3();
+      let rawModel = gltf.scene;
+      
+      // 1. Initial Bounding Box
+      let box = new THREE.Box3().setFromObject(rawModel);
+      let size = new THREE.Vector3();
       box.getSize(size);
+
+      // 2. Auto-orient: A food dish/plate should be flat. 
+      // If its thinnest dimension is Z or X, it was exported sideways!
+      if (size.z < size.y && size.z < size.x) {
+        rawModel.rotation.x = -Math.PI / 2;
+        rawModel.updateMatrixWorld(true);
+        box.setFromObject(rawModel);
+        box.getSize(size);
+      } else if (size.x < size.y && size.x < size.z) {
+        rawModel.rotation.z = Math.PI / 2;
+        rawModel.updateMatrixWorld(true);
+        box.setFromObject(rawModel);
+        box.getSize(size);
+      }
+
+      // 3. Auto-center: Many GLBs have origins meters away from the actual geometry.
+      const center = box.getCenter(new THREE.Vector3());
+      
+      // Shift geometry so its center X/Z is at 0, and its absolute bottom Y rests exactly at 0
+      rawModel.position.x -= center.x;
+      rawModel.position.y -= box.min.y;
+      rawModel.position.z -= center.z;
+
+      // 4. Wrap in a clean pivot group
+      const wrapper = new THREE.Group();
+      wrapper.add(rawModel);
+
+      // 5. Calculate final scale based on the corrected bounding box
       const maxDim = Math.max(size.x, size.y, size.z);
-      // Target 0.40m (40cm) — a food dish should be clearly visible in AR.
-      // Previous 0.25m was too small; food plates are ~25-30cm real size,
-      // so 40cm gives a clear, realistic-looking object.
-      model.userData.s = maxDim > 0 ? 0.40 / maxDim : 1;
-      console.log(`✅ GLB ready. size=${maxDim.toFixed(3)} → scale=${model.userData.s.toFixed(3)}`);
-      model.traverse((c) => {
+      // Target 0.35m (35cm) for a realistic plate size
+      wrapper.userData.s = maxDim > 0 ? 0.35 / maxDim : 1;
+      
+      wrapper.traverse((c) => {
         if (c.isMesh) {
           c.frustumCulled = false;
           if (c.material) { c.material.side = THREE.DoubleSide; c.material.needsUpdate = true; }
         }
       });
+
+      model = wrapper;
+      console.log(`✅ GLB centered and oriented. targetScale=${wrapper.userData.s.toFixed(3)}`);
     }, undefined, (e) => console.error("❌ GLB:", e));
 
     let placedModel = null;
