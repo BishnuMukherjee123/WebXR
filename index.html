@@ -3,11 +3,14 @@
   <head>
     <meta charset="UTF-8" />
     <link rel="icon" type="image/svg+xml" href="/favicon.svg" />
-    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-    <title>webxr-ar</title>
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, user-scalable=no" />
+    <title>WebXR AR</title>
   </head>
   <body>
     <div id="root"></div>
+    <!-- Dedicated AR overlay div: transparent background, used as domOverlay root -->
+    <!-- ARButton will toggle display:none ↔ '' on this element automatically -->
+    <div id="ar-overlay"></div>
     <script type="module" src="/src/main.jsx"></script>
   </body>
 </html>

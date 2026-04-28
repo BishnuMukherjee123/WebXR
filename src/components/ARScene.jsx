@@ -10,7 +10,7 @@ export default function ARScene() {
   useEffect(() => {
     const container = containerRef.current;
 
-    // ── Core Three.js objects ─────────────────────────────────────
+    // ── Scene ─────────────────────────────────────────────────────
     const scene = new THREE.Scene();
     let controller1, controller2, reticle;
     let preloadedModel = null;
@@ -18,41 +18,32 @@ export default function ARScene() {
     let hitTestSourceRequested = false;
 
     // ── Lights ────────────────────────────────────────────────────
-    // HemisphereLight: official Three.js AR example uses intensity 3
     const hemiLight = new THREE.HemisphereLight(0xffffff, 0xbbbbff, 3);
     hemiLight.position.set(0.5, 1, 0.25);
     scene.add(hemiLight);
-
-    // DirectionalLight: needed for PBR (MeshStandardMaterial) shading
     const dirLight = new THREE.DirectionalLight(0xffffff, 2);
     dirLight.position.set(1, 3, 2);
     scene.add(dirLight);
 
     // ── Camera ────────────────────────────────────────────────────
-    // near/far per Three.js official AR example: 0.01, 20
-    const camera = new THREE.PerspectiveCamera(
-      70,
-      window.innerWidth / window.innerHeight,
-      0.01,
-      20
-    );
+    const camera = new THREE.PerspectiveCamera(70, window.innerWidth / window.innerHeight, 0.01, 20);
 
     // ── Renderer ──────────────────────────────────────────────────
-    // alpha:true + premultipliedAlpha:false → required for AR camera passthrough
+    // alpha: true  → canvas has alpha channel (transparent where nothing is drawn)
+    // premultipliedAlpha: false → required on Android Chrome for correct AR blending
     const renderer = new THREE.WebGLRenderer({
       antialias: true,
       alpha: true,
-      premultipliedAlpha: false, // required on Android Chrome for correct AR transparency
+      premultipliedAlpha: false,
     });
     renderer.setPixelRatio(window.devicePixelRatio);
     renderer.setSize(window.innerWidth, window.innerHeight);
 
-    // ✅ CRITICAL: set clear color alpha=0 so the XR compositor can show
-    //    the camera feed THROUGH the canvas. Without this the canvas
-    //    renders opaque black even though alpha:true is set.
+    // CRITICAL: alpha=0 clear color → canvas pixels are transparent where
+    // no 3D content exists, allowing the XR camera feed to show through.
     renderer.setClearColor(0x000000, 0);
 
-    // Required for correct PBR/GLB rendering (avoids pitch-black models)
+    // Correct PBR rendering for GLTF/GLB models
     renderer.outputColorSpace = THREE.SRGBColorSpace;
     renderer.toneMapping = THREE.ACESFilmicToneMapping;
     renderer.toneMappingExposure = 1.5;
@@ -60,30 +51,28 @@ export default function ARScene() {
     container.appendChild(renderer.domElement);
 
     // ── AR Button ─────────────────────────────────────────────────
-    // Official Three.js way: ARButton handles session lifecycle.
-    // requiredFeatures: ['hit-test'] enables surface detection.
+    // CRITICAL: Use a dedicated transparent div as domOverlay root.
+    // Using document.body (which has background:#000) as the root causes
+    // the black background to render as an overlay ON TOP of the camera feed.
+    const arOverlay = document.getElementById("ar-overlay");
+
     const arButton = ARButton.createButton(renderer, {
       requiredFeatures: ["hit-test"],
       optionalFeatures: ["dom-overlay", "local-floor", "bounded-floor"],
-      domOverlay: { root: document.body },
+      domOverlay: { root: arOverlay },
     });
     document.body.appendChild(arButton);
 
-    // ── Select / place model ──────────────────────────────────────
+    // ── Controllers / Tap Handler ─────────────────────────────────
     function onSelect() {
       if (!reticle || !reticle.visible) return;
       if (!preloadedModel) {
         console.warn("⚠️ Model not ready yet");
         return;
       }
-
       const model = skeletonClone(preloadedModel);
-
-      // Official decompose pattern from Three.js webxr_ar_hittest.html
       reticle.matrix.decompose(model.position, model.quaternion, model.scale);
-      // Force a visible scale (decomposed scale from reticle is ~0)
       model.scale.set(0.3, 0.3, 0.3);
-
       model.traverse((child) => {
         if (child.isMesh) {
           child.visible = true;
@@ -91,12 +80,10 @@ export default function ARScene() {
           if (child.material) child.material.needsUpdate = true;
         }
       });
-
       scene.add(model);
       console.log("✅ Model placed at", model.position);
     }
 
-    // Register both controllers (index 0 = primary touch on phone)
     controller1 = renderer.xr.getController(0);
     controller1.addEventListener("select", onSelect);
     scene.add(controller1);
@@ -105,8 +92,7 @@ export default function ARScene() {
     controller2.addEventListener("select", onSelect);
     scene.add(controller2);
 
-    // ── Reticle (surface indicator ring) ─────────────────────────
-    // Matches Three.js official example exactly
+    // ── Reticle ───────────────────────────────────────────────────
     reticle = new THREE.Mesh(
       new THREE.RingGeometry(0.15, 0.2, 32).rotateX(-Math.PI / 2),
       new THREE.MeshBasicMaterial({ color: 0xffffff, side: THREE.DoubleSide })
@@ -116,8 +102,7 @@ export default function ARScene() {
     scene.add(reticle);
 
     // ── Preload GLB ───────────────────────────────────────────────
-    const loader = new GLTFLoader();
-    loader.load(
+    new GLTFLoader().load(
       "/models/10.glb",
       (gltf) => {
         preloadedModel = gltf.scene;
@@ -125,16 +110,12 @@ export default function ARScene() {
           if (child.isMesh) {
             child.frustumCulled = false;
             if (child.material) child.material.needsUpdate = true;
-            console.log(`🧱 Mesh loaded: "${child.name}" | ${child.material?.type}`);
           }
         });
-        console.log("✅ GLB preloaded successfully");
+        console.log("✅ GLB preloaded");
       },
-      (xhr) => {
-        if (xhr.total > 0)
-          console.log(`📦 GLB: ${Math.round((xhr.loaded / xhr.total) * 100)}%`);
-      },
-      (err) => console.error("❌ GLB failed to load:", err)
+      undefined,
+      (err) => console.error("❌ GLB failed:", err)
     );
 
     // ── Resize ────────────────────────────────────────────────────
@@ -145,62 +126,46 @@ export default function ARScene() {
     }
     window.addEventListener("resize", onWindowResize);
 
-    // ── Animation Loop ────────────────────────────────────────────
-    // Per Three.js official docs: hit-test source is lazily requested
-    // on the FIRST XR frame (not upfront), using hitTestSourceRequested flag.
+    // ── Animation Loop (official Three.js AR pattern) ─────────────
     function animate(timestamp, frame) {
       if (frame) {
         const referenceSpace = renderer.xr.getReferenceSpace();
         const session = renderer.xr.getSession();
 
-        // Request hit-test source once, on first XR frame
         if (!hitTestSourceRequested) {
           session
             .requestReferenceSpace("viewer")
-            .then((viewerSpace) =>
-              session
-                .requestHitTestSource({ space: viewerSpace })
-                .then((source) => {
-                  hitTestSource = source;
-                  console.log("✅ Hit-test source ready");
-                })
-            );
+            .then((vs) => session.requestHitTestSource({ space: vs }))
+            .then((src) => { hitTestSource = src; });
 
           session.addEventListener("end", () => {
             hitTestSourceRequested = false;
             hitTestSource = null;
           });
-
           hitTestSourceRequested = true;
         }
 
-        // Update reticle position from hit results
         if (hitTestSource) {
           const results = frame.getHitTestResults(hitTestSource);
           if (results.length > 0) {
-            const hit = results[0];
             reticle.visible = true;
-            reticle.matrix.fromArray(
-              hit.getPose(referenceSpace).transform.matrix
-            );
+            reticle.matrix.fromArray(results[0].getPose(referenceSpace).transform.matrix);
           } else {
             reticle.visible = false;
           }
         }
       }
-
       renderer.render(scene, camera);
     }
 
     renderer.setAnimationLoop(animate);
 
-    // ── Global reset (called from UIOverlay) ──────────────────────
+    // ── Reset ─────────────────────────────────────────────────────
     window.resetAR = () => {
       const keep = new Set([reticle, controller1, controller2]);
       scene.children
         .filter((o) => !keep.has(o) && !(o instanceof THREE.Light))
         .forEach((o) => scene.remove(o));
-      console.log("🔄 Scene reset");
     };
 
     // ── Cleanup ───────────────────────────────────────────────────
@@ -208,21 +173,14 @@ export default function ARScene() {
       window.removeEventListener("resize", onWindowResize);
       renderer.setAnimationLoop(null);
       renderer.dispose();
-      if (arButton.parentNode) arButton.parentNode.removeChild(arButton);
+      arButton.remove();
     };
   }, []);
 
   return (
     <div
       ref={containerRef}
-      style={{
-        position: "fixed",
-        top: 0,
-        left: 0,
-        width: "100%",
-        height: "100%",
-        overflow: "hidden",
-      }}
+      style={{ position: "fixed", inset: 0, overflow: "hidden" }}
     />
   );
 }
