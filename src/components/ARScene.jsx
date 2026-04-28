@@ -47,6 +47,13 @@ export default function ARScene() {
     // ── 1. CAMERA FEED ────────────────────────────────────────────
     let stream = null;
     log("📷 Requesting camera...");
+
+    // Fix React JSX bug: 'muted' prop does NOT set the DOM attribute.
+    // Must be set programmatically or autoplay policy blocks video on mobile.
+    video.muted = true;
+    video.setAttribute("playsinline", "");        // Standard
+    video.setAttribute("webkit-playsinline", ""); // iOS Safari legacy
+
     navigator.mediaDevices
       .getUserMedia({
         video: { facingMode: { ideal: "environment" }, width: { ideal: 1280 }, height: { ideal: 720 } },
@@ -56,18 +63,31 @@ export default function ARScene() {
         stream = s;
         video.srcObject = s;
         log("✅ Camera stream assigned");
+
         const tryPlay = () => {
+          video.muted = true; // ensure still muted before play
           const p = video.play();
           if (p !== undefined) {
-            p.then(() => log("▶️ Video playing"))
+            p.then(() => log("▶️ Video playing ✅"))
              .catch((err) => {
-               log(`⚠️ play() blocked: ${err.message} — retrying…`);
-               setTimeout(() => video.play().catch((e) => log(`❌ Retry failed: ${e.message}`)), 400);
+               log(`⚠️ play() blocked: ${err.message} — retrying in 400ms…`);
+               setTimeout(() => {
+                 video.muted = true;
+                 video.play()
+                   .then(() => log("▶️ Video playing on retry ✅"))
+                   .catch((e) => log(`❌ Retry failed: ${e.message}`));
+               }, 400);
              });
+          } else {
+            log("▶️ play() called (no promise — old browser)");
           }
         };
-        if (video.readyState >= 1) tryPlay();
-        else video.addEventListener("loadedmetadata", tryPlay, { once: true });
+
+        if (video.readyState >= 1) {
+          tryPlay();
+        } else {
+          video.addEventListener("loadedmetadata", tryPlay, { once: true });
+        }
       })
       .catch((err) => log(`❌ Camera error: ${err.name}: ${err.message}`));
 
@@ -295,7 +315,9 @@ export default function ARScene() {
 
   return (
     <>
-      {/* autoPlay + playsInline + muted are ALL required for camera on mobile */}
+      {/* NOTE: autoPlay alone is not enough on mobile.
+           video.muted = true is set via ref in useEffect to work around
+           a React JSX bug where the muted prop does not set the DOM attribute. */}
       <video
         ref={videoRef}
         autoPlay
@@ -305,6 +327,7 @@ export default function ARScene() {
           position: "fixed", inset: 0,
           width: "100%", height: "100%",
           objectFit: "cover", zIndex: 0,
+          display: "block",
         }}
       />
       <div
