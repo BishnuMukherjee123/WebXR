@@ -75,73 +75,86 @@ export default function ARScene() {
       });
     }, undefined, (e) => console.error("❌ GLB:", e));
 
-    // ── Controller — Three.js XR tap approach ────────────────────
-    // placedModel + placedAnchor track the current placement.
-    // XR Anchors (if supported) pin the model to a real-world point;
-    // ARCore continuously updates the anchor pose to correct tracking drift,
-    // making the model stay exactly where you tapped.
+    // ── Controller — tap to place ─────────────────────────────────
+    // Strategy: PLACE ONCE, FREEZE FOREVER.
+    //
+    // XR Anchors were removed because anchor.getPose() is called every frame
+    // WHILE ARCore is still converging its SLAM map. During those first
+    // seconds the anchor pose itself drifts, causing the model to visibly move.
+    //
+    // The correct approach:
+    //   1. On tap, read the hit-test pose for that exact frame
+    //   2. Build the model matrix from it ONCE
+    //   3. Set matrixAutoUpdate = false  →  Three.js never rebuilds the matrix
+    //   4. Never write to the matrix again
+    //
+    // Result: model is frozen in WebGL world-space. The XR camera tracks the
+    // real camera pose every frame, so as you move the phone the model
+    // correctly appears anchored to the surface.
     let placedModel = null;
-    let placedAnchor = null;
-    let lastHitResult = null; // stores the XRHitTestResult for anchor creation
+    // Pre-alloc scratch objects used at placement time (not per-frame)
+    const _hitPos  = new THREE.Vector3();
+    const _hitQuat = new THREE.Quaternion();
+    const _hitScl  = new THREE.Vector3();
+    const _hitMat  = new THREE.Matrix4();
+    const _hitScaleVec = new THREE.Vector3();
 
     const controller = renderer.xr.getController(0);
-    controller.addEventListener("select", async () => {
+    controller.addEventListener("select", () => {
       if (!model) { console.warn("⚠️ Model not loaded"); return; }
 
-      // Clean up previous placement
-      if (placedAnchor) {
-        placedAnchor.delete();
-        placedAnchor = null;
-      }
-      if (placedModel) {
-        scene.remove(placedModel);
-        placedModel = null;
-      }
+      // Remove previous model
+      if (placedModel) { scene.remove(placedModel); placedModel = null; }
 
       const clone = skeletonClone(model);
       const s = model.userData.s ?? 1;
-      clone.scale.set(s, s, s);
-      clone.matrixAutoUpdate = false; // We'll drive it from the anchor pose
 
-      if (reticle.visible && lastHitResult) {
-        // ── Try XR Anchor (best stability) ───────────────────────
-        try {
-          const anchor = await lastHitResult.createAnchor();
-          placedAnchor = anchor;
-          // Initial position from reticle so model appears immediately
-          clone.position.setFromMatrixPosition(reticle.matrix);
-          clone.quaternion.setFromRotationMatrix(reticle.matrix);
-          clone.updateMatrix();
-          console.log("⚓ Anchor created — model is world-locked");
-        } catch (e) {
-          // Anchor API not supported — fall back to static placement
-          console.warn("⚠️ Anchors not supported, using static placement:", e.message);
-          clone.matrixAutoUpdate = true;
-          clone.position.setFromMatrixPosition(reticle.matrix);
-          clone.quaternion.setFromRotationMatrix(reticle.matrix);
-        }
+      // Disable Three.js auto-matrix rebuild — we own the matrix from here
+      clone.matrixAutoUpdate = false;
+      clone.traverse((c) => {
+        c.matrixAutoUpdate = false;
+        if (c.isMesh) c.frustumCulled = false;
+      });
+
+      if (reticle.visible) {
+        // ── Primary path: place exactly at the detected surface ───
+        // reticle.matrix is already the hit-test pose for this frame
+        // (set just before this select event fires in the XR pipeline).
+        // Decompose → re-compose with user scale so we never accumulate.
+        _hitMat.copy(reticle.matrix);
+        _hitMat.decompose(_hitPos, _hitQuat, _hitScl);
+        _hitScaleVec.set(s, s, s);
+        clone.matrix.compose(_hitPos, _hitQuat, _hitScaleVec);
+        clone.matrixWorldNeedsUpdate = true;
+        console.log("✅ Placed on surface at", _hitPos);
       } else {
-        // Fallback: place 1.2m in front of camera
-        clone.matrixAutoUpdate = true;
-        const camPos = new THREE.Vector3();
-        const camDir = new THREE.Vector3();
-        renderer.xr.getCamera().getWorldPosition(camPos);
-        renderer.xr.getCamera().getWorldDirection(camDir);
-        clone.position.copy(camPos).addScaledVector(camDir, 1.2);
-        console.warn("⚠️ No surface — placed 1.2m in front");
+        // ── Fallback: 1.2 m in front of the XR camera ─────────────
+        const xrCam = renderer.xr.getCamera();
+        _hitPos.setFromMatrixPosition(xrCam.matrixWorld);
+        xrCam.getWorldDirection(_hitQuat.set(0,0,0,1)); // reuse vec temporarily
+        _hitPos.addScaledVector(
+          new THREE.Vector3().setFromMatrixColumn(xrCam.matrixWorld, 2).negate(),
+          1.2
+        );
+        _hitScaleVec.set(s, s, s);
+        clone.matrix.compose(
+          _hitPos,
+          new THREE.Quaternion().setFromRotationMatrix(xrCam.matrixWorld),
+          _hitScaleVec
+        );
+        clone.matrixWorldNeedsUpdate = true;
+        console.warn("⚠️ No surface — placed 1.2m in front of camera");
       }
 
-      clone.traverse((c) => { if (c.isMesh) c.frustumCulled = false; });
       scene.add(clone);
       placedModel = clone;
-      console.log("✅ Placed at", clone.position);
     });
     scene.add(controller);
 
     // ── AR Button ────────────────────────────────────────────────
     const btn = ARButton.createButton(renderer, {
       requiredFeatures: ["hit-test"],
-      optionalFeatures: ["dom-overlay", "anchors"], // anchors = world-locked placement
+      optionalFeatures: ["dom-overlay"],
       domOverlay: { root: overlay },
     });
     document.body.appendChild(btn);
@@ -152,31 +165,20 @@ export default function ARScene() {
       hitTestSource = null;
       hitTestSourceRequested = false;
       reticle.visible = false;
-      lastHitResult = null;
-      if (placedAnchor) { placedAnchor.delete(); placedAnchor = null; }
       setInSession(false);
     });
 
-    // ── Hit-test state (initialized inside loop — Three.js official pattern) ─
+    // ── Hit-test state ────────────────────────────────────────────
     let hitTestSource = null;
     let hitTestSourceRequested = false;
 
-    // Pre-allocated temp objects for anchor matrix math (avoids GC per frame).
-    // Each frame we decompose the anchor's 4x4 pose matrix into position + quaternion,
-    // then re-compose with the user-defined scale. This keeps the model
-    // world-locked at exactly the tapped point with the correct size.
-    const _aPos  = new THREE.Vector3();    // anchor world position
-    const _aQuat = new THREE.Quaternion(); // anchor world rotation
-    const _aScl  = new THREE.Vector3();   // temp — anchor has no user scale, ignored
-    const _aMat  = new THREE.Matrix4();   // scratch matrix
-    const _aScaleVec = new THREE.Vector3(); // reused scale vector for compose()
-
-    // ── Animation loop — EXACT Three.js official example pattern ──
+    // ── Animation loop ────────────────────────────────────────────
     renderer.setAnimationLoop((timestamp, frame) => {
       if (frame) {
         const refSpace = renderer.xr.getReferenceSpace();
         const session = renderer.xr.getSession();
 
+        // Request hit-test source once per session (Three.js official pattern)
         if (!hitTestSourceRequested) {
           session.requestReferenceSpace("viewer").then((vs) =>
             session.requestHitTestSource({ space: vs }).then((src) => {
@@ -190,47 +192,20 @@ export default function ARScene() {
           hitTestSourceRequested = true;
         }
 
+        // Update reticle — shows where the model will land
         if (hitTestSource) {
           const results = frame.getHitTestResults(hitTestSource);
           if (results.length > 0) {
             const pose = results[0].getPose(refSpace);
             reticle.visible = true;
             reticle.matrix.fromArray(pose.transform.matrix);
-            lastHitResult = results[0]; // save for anchor creation on tap
           } else {
             reticle.visible = false;
-            lastHitResult = null;
           }
         }
-
-        // ── World-lock: update model matrix from anchor pose every frame ──
-        //
-        // MATH EXPLANATION:
-        // anchorPose.transform.matrix is a column-major 4×4 matrix:
-        //   [ R  | t ]   where R = 3×3 rotation, t = translation (world position)
-        //   [ 0  | 1 ]
-        //
-        // We CANNOT just do matrix.fromArray() then matrix.scale() because
-        // Matrix4.scale(v) MULTIPLIES each column by v — applying scale every
-        // frame causes exponential growth (model flies away).
-        //
-        // CORRECT approach:
-        //   1. decompose() → extracts pos + quat + (ignored anchor scale=1)
-        //   2. compose(pos, quat, userScale) → builds correct matrix once
-        //
-        if (placedAnchor && placedModel && frame.trackedAnchors?.has(placedAnchor)) {
-          const anchorPose = frame.getPose(placedAnchor.anchorSpace, refSpace);
-          if (anchorPose) {
-            const s = model?.userData.s ?? 1;
-            // Step 1: extract pos + rotation from the 4×4 anchor pose matrix
-            _aMat.fromArray(anchorPose.transform.matrix);
-            _aMat.decompose(_aPos, _aQuat, _aScl); // _aScl is unit (1,1,1), ignored
-            // Step 2: compose model matrix = anchor position + anchor rotation + user scale
-            _aScaleVec.set(s, s, s);
-            placedModel.matrix.compose(_aPos, _aQuat, _aScaleVec);
-            placedModel.matrixWorldNeedsUpdate = true;
-          }
-        }
+        // NOTE: placedModel matrix is NEVER touched here.
+        // matrixAutoUpdate=false means Three.js also never rebuilds it.
+        // The matrix is written exactly once (on tap) and stays frozen.
       }
       renderer.render(scene, camera);
     });
@@ -248,9 +223,7 @@ export default function ARScene() {
       [...scene.children]
         .filter((o) => o !== reticle && o !== controller && !o.isLight)
         .forEach((o) => scene.remove(o));
-      if (placedAnchor) { placedAnchor.delete(); placedAnchor = null; }
       placedModel = null;
-      lastHitResult = null;
       reticle.visible = false;
     };
 
