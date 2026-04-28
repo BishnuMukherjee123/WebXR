@@ -76,16 +76,23 @@ export default function ARScene() {
     }, undefined, (e) => console.error("❌ GLB:", e));
 
     // ── Controller — Three.js XR tap approach ────────────────────
-    // placedModel tracks the ONE model in the scene.
-    // Each tap removes the old one before placing the new clone,
-    // so models never stack on top of each other.
+    // placedModel + placedAnchor track the current placement.
+    // XR Anchors (if supported) pin the model to a real-world point;
+    // ARCore continuously updates the anchor pose to correct tracking drift,
+    // making the model stay exactly where you tapped.
     let placedModel = null;
+    let placedAnchor = null;
+    let lastHitResult = null; // stores the XRHitTestResult for anchor creation
 
     const controller = renderer.xr.getController(0);
-    controller.addEventListener("select", () => {
+    controller.addEventListener("select", async () => {
       if (!model) { console.warn("⚠️ Model not loaded"); return; }
 
-      // Remove previous placement
+      // Clean up previous placement
+      if (placedAnchor) {
+        placedAnchor.delete();
+        placedAnchor = null;
+      }
       if (placedModel) {
         scene.remove(placedModel);
         placedModel = null;
@@ -94,13 +101,28 @@ export default function ARScene() {
       const clone = skeletonClone(model);
       const s = model.userData.s ?? 1;
       clone.scale.set(s, s, s);
+      clone.matrixAutoUpdate = false; // We'll drive it from the anchor pose
 
-      if (reticle.visible) {
-        // Surface detected — place exactly on it
-        clone.position.setFromMatrixPosition(reticle.matrix);
-        clone.quaternion.setFromRotationMatrix(reticle.matrix);
+      if (reticle.visible && lastHitResult) {
+        // ── Try XR Anchor (best stability) ───────────────────────
+        try {
+          const anchor = await lastHitResult.createAnchor();
+          placedAnchor = anchor;
+          // Initial position from reticle so model appears immediately
+          clone.position.setFromMatrixPosition(reticle.matrix);
+          clone.quaternion.setFromRotationMatrix(reticle.matrix);
+          clone.updateMatrix();
+          console.log("⚓ Anchor created — model is world-locked");
+        } catch (e) {
+          // Anchor API not supported — fall back to static placement
+          console.warn("⚠️ Anchors not supported, using static placement:", e.message);
+          clone.matrixAutoUpdate = true;
+          clone.position.setFromMatrixPosition(reticle.matrix);
+          clone.quaternion.setFromRotationMatrix(reticle.matrix);
+        }
       } else {
         // Fallback: place 1.2m in front of camera
+        clone.matrixAutoUpdate = true;
         const camPos = new THREE.Vector3();
         const camDir = new THREE.Vector3();
         renderer.xr.getCamera().getWorldPosition(camPos);
@@ -119,7 +141,7 @@ export default function ARScene() {
     // ── AR Button ────────────────────────────────────────────────
     const btn = ARButton.createButton(renderer, {
       requiredFeatures: ["hit-test"],
-      optionalFeatures: ["dom-overlay"],
+      optionalFeatures: ["dom-overlay", "anchors"], // anchors = world-locked placement
       domOverlay: { root: overlay },
     });
     document.body.appendChild(btn);
@@ -130,6 +152,8 @@ export default function ARScene() {
       hitTestSource = null;
       hitTestSourceRequested = false;
       reticle.visible = false;
+      lastHitResult = null;
+      if (placedAnchor) { placedAnchor.delete(); placedAnchor = null; }
       setInSession(false);
     });
 
@@ -162,8 +186,22 @@ export default function ARScene() {
             const pose = results[0].getPose(refSpace);
             reticle.visible = true;
             reticle.matrix.fromArray(pose.transform.matrix);
+            lastHitResult = results[0]; // save for anchor creation on tap
           } else {
             reticle.visible = false;
+            lastHitResult = null;
+          }
+        }
+
+        // ── Update placed model from anchor pose (world-lock) ─────
+        if (placedAnchor && placedModel && frame.trackedAnchors?.has(placedAnchor)) {
+          const anchorPose = frame.getPose(placedAnchor.anchorSpace, refSpace);
+          if (anchorPose) {
+            placedModel.matrix.fromArray(anchorPose.transform.matrix);
+            // Re-apply user scale (anchor pose doesn't carry scale)
+            const s = model?.userData.s ?? 1;
+            placedModel.matrix.scale(new THREE.Vector3(s, s, s));
+            placedModel.matrixWorldNeedsUpdate = true;
           }
         }
       }
@@ -183,7 +221,9 @@ export default function ARScene() {
       [...scene.children]
         .filter((o) => o !== reticle && o !== controller && !o.isLight)
         .forEach((o) => scene.remove(o));
+      if (placedAnchor) { placedAnchor.delete(); placedAnchor = null; }
       placedModel = null;
+      lastHitResult = null;
       reticle.visible = false;
     };
 
