@@ -76,30 +76,42 @@ export default function ARScene() {
     }, undefined, (e) => console.error("❌ GLB:", e));
 
     // ── Controller — Three.js XR tap approach ────────────────────
+    // placedModel tracks the ONE model in the scene.
+    // Each tap removes the old one before placing the new clone,
+    // so models never stack on top of each other.
+    let placedModel = null;
+
     const controller = renderer.xr.getController(0);
     controller.addEventListener("select", () => {
       if (!model) { console.warn("⚠️ Model not loaded"); return; }
+
+      // Remove previous placement
+      if (placedModel) {
+        scene.remove(placedModel);
+        placedModel = null;
+      }
 
       const clone = skeletonClone(model);
       const s = model.userData.s ?? 1;
       clone.scale.set(s, s, s);
 
       if (reticle.visible) {
-        // Best case: surface detected — place exactly on it
+        // Surface detected — place exactly on it
         clone.position.setFromMatrixPosition(reticle.matrix);
         clone.quaternion.setFromRotationMatrix(reticle.matrix);
       } else {
-        // Fallback: no surface yet — place 1.2m in front of camera
+        // Fallback: place 1.2m in front of camera
         const camPos = new THREE.Vector3();
         const camDir = new THREE.Vector3();
         renderer.xr.getCamera().getWorldPosition(camPos);
         renderer.xr.getCamera().getWorldDirection(camDir);
         clone.position.copy(camPos).addScaledVector(camDir, 1.2);
-        console.warn("⚠️ No surface — placed 1.2m in front of camera");
+        console.warn("⚠️ No surface — placed 1.2m in front");
       }
 
       clone.traverse((c) => { if (c.isMesh) c.frustumCulled = false; });
       scene.add(clone);
+      placedModel = clone;
       console.log("✅ Placed at", clone.position);
     });
     scene.add(controller);
@@ -171,6 +183,7 @@ export default function ARScene() {
       [...scene.children]
         .filter((o) => o !== reticle && o !== controller && !o.isLight)
         .forEach((o) => scene.remove(o));
+      placedModel = null;
       reticle.visible = false;
     };
 
