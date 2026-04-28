@@ -72,7 +72,9 @@ export default function ARScene() {
         referenceSpaceType: "local-floor"
       },
       optionalFeatures: true,
-      disableDefaultUI: true // We use our own React UI to launch AR
+      disableDefaultUI: true, // We use our own React UI to launch AR
+      disableTeleportation: true, // Removes the green expanding/shrinking circle
+      disablePointerSelection: true // Removes VR laser pointers
     }).then((xr) => {
       xrHelperRef.current = xr;
       const featuresManager = xr.baseExperience.featuresManager;
@@ -82,10 +84,8 @@ export default function ARScene() {
         element: overlayRef.current
       });
 
-      // 2. Enable Hit Testing (Invisible reticle internally handled)
-      const hitTest = featuresManager.enableFeature(WebXRFeatureName.HIT_TEST, "latest", {
-        enableBackgroundHitTest: true
-      });
+      // 2. Enable Hit Testing
+      const hitTest = featuresManager.enableFeature(WebXRFeatureName.HIT_TEST, "latest");
 
       // 3. Enable Native Anchors (Crucial for 0 drift)
       const anchorSystem = featuresManager.enableFeature(WebXRFeatureName.ANCHOR_SYSTEM, "latest");
@@ -103,6 +103,27 @@ export default function ARScene() {
         }
       });
 
+      // The Babylon way: Attach the node using the anchor added observable
+      anchorSystem.onAnchorAddedObservable.add((anchor) => {
+        if (!anchorRoot) {
+          anchorRoot = new TransformNode("anchorRoot", scene);
+          modelRoot.parent = anchorRoot;
+        }
+        
+        // This locks the model tightly to the real-world tracking without manual math
+        anchor.attachedNode = anchorRoot;
+        
+        // Ensure the model shows its front side and doesn't rotate automatically
+        if (!modelRoot.rotationQuaternion) {
+          modelRoot.rotationQuaternion = Quaternion.Identity();
+        } else {
+          modelRoot.rotationQuaternion.copyFrom(Quaternion.Identity());
+        }
+
+        modelRoot.setEnabled(true);
+        console.log("⚓ Babylon Anchor Created and Node Attached");
+      });
+
       // ── Placement Logic (Tap) ──────────────────────────────────────
       scene.onPointerObservable.add(async (pointerInfo) => {
         if (pointerInfo.type === PointerEventTypes.POINTERDOWN) {
@@ -118,33 +139,8 @@ export default function ARScene() {
             }
 
             // Create new anchor directly from the hardware hit test
-            const anchor = await anchorSystem.addAnchorPointUsingHitTestResultAsync(lastHitTest);
-            if (anchor) {
-              placedAnchor = anchor;
-              
-              if (!anchorRoot) {
-                anchorRoot = new TransformNode("anchorRoot", scene);
-                modelRoot.parent = anchorRoot;
-                modelRoot.setEnabled(true);
-              }
-              
-              // Babylon's native anchor system automatically updates attachedNode every frame!
-              anchor.attachedNode = anchorRoot;
-              
-              // Rotate the inner model to face the camera like a lazy-susan (Y-axis)
-              const camPos = xr.baseExperience.camera.position;
-              const anchorMatrix = anchorRoot.getWorldMatrix().clone().invert();
-              const camPosLocal = Vector3.TransformCoordinates(camPos, anchorMatrix);
-              
-              // Babylon is left-handed, atan2(x, z) rotates around Y correctly
-              const angle = Math.atan2(camPosLocal.x, camPosLocal.z);
-              if (!modelRoot.rotationQuaternion) {
-                 modelRoot.rotationQuaternion = Quaternion.Identity();
-              }
-              modelRoot.rotationQuaternion = Quaternion.RotationAxis(Vector3.Up(), angle);
-
-              console.log("⚓ Babylon Anchor Created and Locked");
-            }
+            // The observable above handles attaching the node
+            placedAnchor = await anchorSystem.addAnchorPointUsingHitTestResultAsync(lastHitTest);
           } catch (e) {
             console.error("⚠️ Anchor placement failed", e);
           } finally {
