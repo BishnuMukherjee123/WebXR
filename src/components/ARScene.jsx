@@ -3,6 +3,37 @@ import * as THREE from "three";
 import { clone as skeletonClone } from "three/addons/utils/SkeletonUtils.js";
 import { GLTFLoader } from "three/addons/loaders/GLTFLoader.js";
 
+// ── On-screen debug log so we can see errors on mobile ─────────────────────
+function createDebugLog() {
+  const el = document.createElement("div");
+  el.id = "ar-debug-log";
+  Object.assign(el.style, {
+    position: "fixed",
+    top: "0",
+    left: "0",
+    right: "0",
+    background: "rgba(0,0,0,0.65)",
+    color: "#0f0",
+    fontSize: "11px",
+    fontFamily: "monospace",
+    padding: "4px 8px",
+    zIndex: "9999",
+    maxHeight: "30vh",
+    overflowY: "auto",
+    pointerEvents: "none",
+    whiteSpace: "pre-wrap",
+    wordBreak: "break-all",
+  });
+  document.body.appendChild(el);
+  return (msg) => {
+    const line = document.createElement("div");
+    line.textContent = `[${new Date().toLocaleTimeString()}] ${msg}`;
+    el.appendChild(line);
+    el.scrollTop = el.scrollHeight;
+    console.log(msg);
+  };
+}
+
 export default function ARScene() {
   const containerRef = useRef();
   const videoRef = useRef();
@@ -10,23 +41,41 @@ export default function ARScene() {
   useEffect(() => {
     const container = containerRef.current;
     const video = videoRef.current;
+    const log = createDebugLog();
 
     // ── 1. CAMERA FEED ────────────────────────────────────────────
     let stream = null;
+    log("📷 Requesting camera...");
     navigator.mediaDevices
       .getUserMedia({
-        video: { facingMode: "environment", width: { ideal: 1280 }, height: { ideal: 720 } },
+        video: { facingMode: { ideal: "environment" }, width: { ideal: 1280 }, height: { ideal: 720 } },
+        audio: false,
       })
-      .then((s) => { stream = s; video.srcObject = s; video.play(); })
-      .catch((err) => console.error("❌ Camera error:", err));
+      .then((s) => {
+        stream = s;
+        video.srcObject = s;
+        log("✅ Camera stream assigned");
+        const tryPlay = () => {
+          const p = video.play();
+          if (p !== undefined) {
+            p.then(() => log("▶️ Video playing"))
+             .catch((err) => {
+               log(`⚠️ play() blocked: ${err.message} — retrying…`);
+               setTimeout(() => video.play().catch((e) => log(`❌ Retry failed: ${e.message}`)), 400);
+             });
+          }
+        };
+        if (video.readyState >= 1) tryPlay();
+        else video.addEventListener("loadedmetadata", tryPlay, { once: true });
+      })
+      .catch((err) => log(`❌ Camera error: ${err.name}: ${err.message}`));
 
     // ── 2. SCENE ──────────────────────────────────────────────────
     const scene = new THREE.Scene();
 
-    // Lights — strong ambient so GLB model always visible
-    const ambientLight = new THREE.AmbientLight(0xffffff, 2);
+    const ambientLight = new THREE.AmbientLight(0xffffff, 2.5);
     scene.add(ambientLight);
-    const hemiLight = new THREE.HemisphereLight(0xffffff, 0xbbbbff, 3);
+    const hemiLight = new THREE.HemisphereLight(0xffffff, 0xbbbbff, 2);
     hemiLight.position.set(0.5, 1, 0.25);
     scene.add(hemiLight);
     const dirLight = new THREE.DirectionalLight(0xffffff, 3);
@@ -41,17 +90,16 @@ export default function ARScene() {
 
     // ── 4. RENDERER — transparent canvas on top of video ──────────
     const renderer = new THREE.WebGLRenderer({ antialias: true, alpha: true });
-    renderer.setPixelRatio(window.devicePixelRatio);
+    renderer.setPixelRatio(Math.min(window.devicePixelRatio, 2));
     renderer.setSize(window.innerWidth, window.innerHeight);
     renderer.setClearColor(0x000000, 0);
     renderer.outputColorSpace = THREE.SRGBColorSpace;
     renderer.toneMapping = THREE.ACESFilmicToneMapping;
     renderer.toneMappingExposure = 1.5;
     container.appendChild(renderer.domElement);
+    log("✅ Renderer created");
 
-    // ── 5. RETICLE — always visible at screen center ───────────────
-    // The reticle sits 1.2m in front of the camera in the scene.
-    // It moves as the phone tilts, showing "where the model will land".
+    // ── 5. RETICLE ────────────────────────────────────────────────
     const reticle = new THREE.Mesh(
       new THREE.RingGeometry(0.06, 0.1, 32).rotateX(-Math.PI / 2),
       new THREE.MeshBasicMaterial({
@@ -69,33 +117,44 @@ export default function ARScene() {
     // ── 7. MODEL LOADING ──────────────────────────────────────────
     let preloadedModel = null;
     const loader = new GLTFLoader();
-    // Load GLB from GitHub via jsDelivr CDN — works on any domain, no Vercel upload needed
-    const MODEL_URL = "https://cdn.jsdelivr.net/gh/BishnuMukherjee123/WebXR@main/public/models/10.glb";
+
+    // Use the local public URL — works on both dev (localhost) and Vercel
+    const MODEL_URL = "/models/10.glb";
+    log(`📦 Loading GLB from: ${MODEL_URL}`);
+
     loader.load(
       MODEL_URL,
       (gltf) => {
         preloadedModel = gltf.scene;
+
+        // Compute bounding box to auto-scale the model sensibly
+        const box = new THREE.Box3().setFromObject(preloadedModel);
+        const size = new THREE.Vector3();
+        box.getSize(size);
+        const maxDim = Math.max(size.x, size.y, size.z);
+        // Normalise to ~0.25m then scale up to 0.3m target size
+        const normalise = maxDim > 0 ? 0.3 / maxDim : 1;
+        preloadedModel.userData.autoScale = normalise;
+
         preloadedModel.traverse((child) => {
           if (child.isMesh) {
             child.frustumCulled = false;
             if (child.material) {
               child.material.needsUpdate = true;
-              // Ensure materials are double-sided for visibility
-              child.material.side = THREE.FrontSide;
+              child.material.side = THREE.DoubleSide;
             }
           }
         });
-        console.log("✅ GLB loaded successfully");
+        log(`✅ GLB loaded! Size: ${size.x.toFixed(2)} x ${size.y.toFixed(2)} x ${size.z.toFixed(2)} → scale ${normalise.toFixed(3)}`);
       },
       (xhr) => {
         if (xhr.total > 0)
-          console.log(`📦 GLB: ${Math.round((xhr.loaded / xhr.total) * 100)}%`);
+          log(`📦 GLB: ${Math.round((xhr.loaded / xhr.total) * 100)}%`);
       },
-      (err) => console.error("❌ GLB load error:", err)
+      (err) => log(`❌ GLB load error: ${err.message || err}`)
     );
 
     // ── 8. DEVICE ORIENTATION ─────────────────────────────────────
-    // Rotate Three.js camera to match phone tilt
     const deviceQuat = new THREE.Quaternion();
     const deviceEuler = new THREE.Euler();
     let hasOrientation = false;
@@ -103,12 +162,8 @@ export default function ARScene() {
     function onOrientation(e) {
       if (e.alpha === null) return;
       hasOrientation = true;
-      // Map device angles to Three.js camera rotation
-      // beta: tilt up/down (0=flat, 90=upright looking forward)
-      // gamma: tilt left/right
-      // alpha: compass heading
       deviceEuler.set(
-        THREE.MathUtils.degToRad(e.beta  - 90),  // -90 so upright = looking forward
+        THREE.MathUtils.degToRad(e.beta  - 90),
         THREE.MathUtils.degToRad(-e.alpha),
         THREE.MathUtils.degToRad(-e.gamma),
         "YXZ"
@@ -118,7 +173,6 @@ export default function ARScene() {
 
     if (window.DeviceOrientationEvent) {
       if (typeof DeviceOrientationEvent.requestPermission === "function") {
-        // iOS 13+
         DeviceOrientationEvent.requestPermission()
           .then((p) => { if (p === "granted") window.addEventListener("deviceorientation", onOrientation); })
           .catch(console.warn);
@@ -127,17 +181,11 @@ export default function ARScene() {
       }
     }
 
-    // ── 9. PLACEMENT — guaranteed to work regardless of phone angle ─
-    // Strategy: ray.at(1.2) places model 1.2m in front along the tap ray.
-    // This ALWAYS returns a valid position — no plane intersection that can fail.
-    // y is clamped so model doesn't appear above camera view.
-
+    // ── 9. PLACEMENT ──────────────────────────────────────────────
     function getPlacementPosition(clientX, clientY) {
       const x = (clientX / window.innerWidth)  *  2 - 1;
       const y = (clientY / window.innerHeight) * -2 + 1;
       raycaster.setFromCamera({ x, y }, camera);
-
-      // Place model 1.2m along the ray from the camera
       const pos = new THREE.Vector3();
       raycaster.ray.at(1.2, pos);
       return pos;
@@ -145,16 +193,17 @@ export default function ARScene() {
 
     function placeModel(clientX, clientY) {
       if (!preloadedModel) {
-        console.warn("⚠️ GLB not loaded yet — wait a moment and try again");
+        log("⚠️ GLB not loaded yet — tap again in a moment");
         return;
       }
 
       const pos = getPlacementPosition(clientX, clientY);
       const model = skeletonClone(preloadedModel);
       model.position.copy(pos);
-      model.scale.set(0.2, 0.2, 0.2);
 
-      // Face the model toward the camera on the horizontal axis only
+      const s = preloadedModel.userData.autoScale ?? 0.3;
+      model.scale.set(s, s, s);
+
       model.lookAt(new THREE.Vector3(
         camera.position.x,
         model.position.y,
@@ -170,16 +219,14 @@ export default function ARScene() {
       });
 
       scene.add(model);
-      console.log("✅ Model placed at", pos);
+      log(`✅ Model placed at (${pos.x.toFixed(2)}, ${pos.y.toFixed(2)}, ${pos.z.toFixed(2)})`);
     }
 
-    // Touch (mobile)
     function onTouchEnd(e) {
       e.preventDefault();
       const t = e.changedTouches[0];
       placeModel(t.clientX, t.clientY);
     }
-    // Click (desktop testing)
     function onClick(e) { placeModel(e.clientX, e.clientY); }
 
     renderer.domElement.addEventListener("touchend", onTouchEnd, { passive: false });
@@ -192,22 +239,15 @@ export default function ARScene() {
     function animate() {
       animId = requestAnimationFrame(animate);
 
-      // Smoothly apply device orientation to camera
       if (hasOrientation) {
         smoothQuat.slerp(deviceQuat, 0.08);
         camera.quaternion.copy(smoothQuat);
       }
 
-      // Keep reticle at screen center, 1.2m in front of camera
-      // This acts as an aiming crosshair
       raycaster.setFromCamera({ x: 0, y: 0 }, camera);
       const reticlePos = new THREE.Vector3();
       raycaster.ray.at(1.2, reticlePos);
       reticle.position.copy(reticlePos);
-
-      // Keep reticle horizontal (parallel to ground)
-      reticle.rotation.set(-Math.PI / 2, 0, 0);
-      // Override with camera-relative rotation so it faces camera
       reticle.lookAt(camera.position);
 
       renderer.render(scene, camera);
@@ -228,7 +268,7 @@ export default function ARScene() {
       [...scene.children]
         .filter((o) => !keep.has(o))
         .forEach((o) => scene.remove(o));
-      console.log("🔄 Scene reset");
+      log("🔄 Scene reset");
     };
 
     // ── CLEANUP ───────────────────────────────────────────────────
@@ -240,13 +280,16 @@ export default function ARScene() {
       renderer.domElement.removeEventListener("click", onClick);
       renderer.dispose();
       if (stream) stream.getTracks().forEach((t) => t.stop());
+      document.getElementById("ar-debug-log")?.remove();
     };
   }, []);
 
   return (
     <>
+      {/* autoPlay + playsInline + muted are ALL required for camera on mobile */}
       <video
         ref={videoRef}
+        autoPlay
         playsInline
         muted
         style={{
