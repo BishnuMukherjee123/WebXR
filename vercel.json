@@ -1,6 +1,7 @@
 {
-  "buildCommand": "",
+  "buildCommand": "npm run build",
   "devCommand": "npm run dev",
-  "installCommand": "",
-  "outputDirectory": "dist"
+  "installCommand": "npm ci --no-workspaces",
+  "outputDirectory": "dist",
+  "framework": "vite"
 }
