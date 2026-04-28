@@ -161,6 +161,16 @@ export default function ARScene() {
     let hitTestSource = null;
     let hitTestSourceRequested = false;
 
+    // Pre-allocated temp objects for anchor matrix math (avoids GC per frame).
+    // Each frame we decompose the anchor's 4x4 pose matrix into position + quaternion,
+    // then re-compose with the user-defined scale. This keeps the model
+    // world-locked at exactly the tapped point with the correct size.
+    const _aPos  = new THREE.Vector3();    // anchor world position
+    const _aQuat = new THREE.Quaternion(); // anchor world rotation
+    const _aScl  = new THREE.Vector3();   // temp — anchor has no user scale, ignored
+    const _aMat  = new THREE.Matrix4();   // scratch matrix
+    const _aScaleVec = new THREE.Vector3(); // reused scale vector for compose()
+
     // ── Animation loop — EXACT Three.js official example pattern ──
     renderer.setAnimationLoop((timestamp, frame) => {
       if (frame) {
@@ -193,14 +203,31 @@ export default function ARScene() {
           }
         }
 
-        // ── Update placed model from anchor pose (world-lock) ─────
+        // ── World-lock: update model matrix from anchor pose every frame ──
+        //
+        // MATH EXPLANATION:
+        // anchorPose.transform.matrix is a column-major 4×4 matrix:
+        //   [ R  | t ]   where R = 3×3 rotation, t = translation (world position)
+        //   [ 0  | 1 ]
+        //
+        // We CANNOT just do matrix.fromArray() then matrix.scale() because
+        // Matrix4.scale(v) MULTIPLIES each column by v — applying scale every
+        // frame causes exponential growth (model flies away).
+        //
+        // CORRECT approach:
+        //   1. decompose() → extracts pos + quat + (ignored anchor scale=1)
+        //   2. compose(pos, quat, userScale) → builds correct matrix once
+        //
         if (placedAnchor && placedModel && frame.trackedAnchors?.has(placedAnchor)) {
           const anchorPose = frame.getPose(placedAnchor.anchorSpace, refSpace);
           if (anchorPose) {
-            placedModel.matrix.fromArray(anchorPose.transform.matrix);
-            // Re-apply user scale (anchor pose doesn't carry scale)
             const s = model?.userData.s ?? 1;
-            placedModel.matrix.scale(new THREE.Vector3(s, s, s));
+            // Step 1: extract pos + rotation from the 4×4 anchor pose matrix
+            _aMat.fromArray(anchorPose.transform.matrix);
+            _aMat.decompose(_aPos, _aQuat, _aScl); // _aScl is unit (1,1,1), ignored
+            // Step 2: compose model matrix = anchor position + anchor rotation + user scale
+            _aScaleVec.set(s, s, s);
+            placedModel.matrix.compose(_aPos, _aQuat, _aScaleVec);
             placedModel.matrixWorldNeedsUpdate = true;
           }
         }
