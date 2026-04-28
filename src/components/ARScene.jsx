@@ -3,7 +3,7 @@ import * as THREE from "three";
 import { ARButton } from "three/addons/webxr/ARButton.js";
 import { GLTFLoader } from "three/addons/loaders/GLTFLoader.js";
 import { DRACOLoader } from "three/addons/loaders/DRACOLoader.js";
-import { clone as skeletonClone } from "three/addons/utils/SkeletonUtils.js";
+
 
 const MODEL_URL =
   "https://iskchovltfnohyftjckg.supabase.co/storage/v1/object/public/models/10.glb";
@@ -104,68 +104,70 @@ export default function ARScene() {
     let placedModel = null;
     let placedAnchor = null;
     let lastHitResult = null;
+    let isPlacing = false; // Prevent ARCore crash from spam-tapping
 
     const controller = renderer.xr.getController(0);
     controller.addEventListener("select", async () => {
-      if (!model) { console.warn("⚠️ Model not loaded"); return; }
+      if (!model || isPlacing) return;
+      isPlacing = true;
 
-      // Remove previous model and anchor
-      if (placedModel) { scene.remove(placedModel); placedModel = null; }
-      if (placedAnchor) { placedAnchor.delete(); placedAnchor = null; }
-
-      const clone = skeletonClone(model);
-      const s = model.userData.s ?? 1;
-
-      // Ensure the model updates its matrix based on our initial placement
-      clone.scale.set(s, s, s);
-      clone.traverse((c) => {
-        if (c.isMesh) c.frustumCulled = false;
-      });
-
-      // 1. Create an independent anchor root. This tracks the floor anchor (handles drift & tilt).
-      const anchorRoot = new THREE.Group();
-      scene.add(anchorRoot);
-      anchorRoot.add(clone);
-      placedModel = anchorRoot;
-
-      const xrCam = renderer.xr.getCamera();
-
-      if (reticle.visible && lastHitResult) {
-        try {
-          placedAnchor = await lastHitResult.createAnchor();
-          console.log("⚓ Anchor created — model is physically locked");
-        } catch (e) {
-          console.warn("⚠️ Anchors not supported", e);
+      try {
+        // 1. Create or reuse the independent anchor root.
+        if (!placedModel) {
+          placedModel = new THREE.Group();
+          scene.add(placedModel);
+          // Add the single original model instance to save memory. NEVER clone!
+          const s = model.userData.s ?? 1;
+          model.scale.set(s, s, s);
+          placedModel.add(model);
+        } else {
+          // It's already in the scene, just make sure it's attached
+          if (placedModel.parent !== scene) scene.add(placedModel);
         }
-        
-        anchorRoot.position.setFromMatrixPosition(reticle.matrix);
-        anchorRoot.quaternion.setFromRotationMatrix(reticle.matrix);
-      } else {
-        // ── Fallback: 1.2 m in front of the XR camera ─────────────
-        anchorRoot.position.setFromMatrixPosition(xrCam.matrixWorld);
-        
-        const camDir = new THREE.Vector3(0, 0, -1);
-        camDir.transformDirection(xrCam.matrixWorld);
-        anchorRoot.position.addScaledVector(camDir, 1.2);
-        
-        anchorRoot.quaternion.setFromRotationMatrix(xrCam.matrixWorld);
-        console.warn("⚠️ No surface — placed 1.2m in front of camera");
-      }
 
-      // 2. Make the dish "face" the camera. 
-      // The anchorRoot tracks the floor's physical tilt, so we only rotate the inner clone 
-      // like a lazy-susan (Y-axis) to point its front side toward the user.
-      anchorRoot.updateMatrixWorld(true);
-      const camPosLocal = anchorRoot.worldToLocal(new THREE.Vector3().setFromMatrixPosition(xrCam.matrixWorld));
-      camPosLocal.y = 0; // Keep it perfectly flat relative to the anchor's floor
-      clone.lookAt(camPosLocal);
+        // Remove previous anchor
+        if (placedAnchor) { placedAnchor.delete(); placedAnchor = null; }
+
+        const xrCam = renderer.xr.getCamera();
+
+        if (reticle.visible && lastHitResult) {
+          try {
+            placedAnchor = await lastHitResult.createAnchor();
+            console.log("⚓ Anchor created — model is physically locked");
+          } catch (e) {
+            console.warn("⚠️ Anchors not supported", e);
+          }
+          
+          placedModel.position.setFromMatrixPosition(reticle.matrix);
+          placedModel.quaternion.setFromRotationMatrix(reticle.matrix);
+        } else {
+          // Fallback: 1.2 m in front of the XR camera
+          placedModel.position.setFromMatrixPosition(xrCam.matrixWorld);
+          
+          const camDir = new THREE.Vector3(0, 0, -1);
+          camDir.transformDirection(xrCam.matrixWorld);
+          placedModel.position.addScaledVector(camDir, 1.2);
+          
+          placedModel.quaternion.setFromRotationMatrix(xrCam.matrixWorld);
+          console.warn("⚠️ No surface — placed 1.2m in front of camera");
+        }
+
+        // 2. Make the dish "face" the camera like a lazy-susan (Y-axis).
+        placedModel.updateMatrixWorld(true);
+        const camPosLocal = placedModel.worldToLocal(new THREE.Vector3().setFromMatrixPosition(xrCam.matrixWorld));
+        camPosLocal.y = 0; // Keep perfectly flat on the physical floor
+        model.lookAt(camPosLocal);
+
+      } finally {
+        isPlacing = false;
+      }
     });
     scene.add(controller);
 
     // ── AR Button ────────────────────────────────────────────────
     const btn = ARButton.createButton(renderer, {
-      requiredFeatures: ["hit-test"],
-      optionalFeatures: ["dom-overlay", "anchors"],
+      requiredFeatures: ["hit-test", "anchors"],
+      optionalFeatures: ["dom-overlay"],
       domOverlay: { root: overlay },
     });
     document.body.appendChild(btn);
@@ -243,11 +245,8 @@ export default function ARScene() {
 
     // ── Reset ────────────────────────────────────────────────────
     window.resetAR = () => {
-      [...scene.children]
-        .filter((o) => o !== reticle && o !== controller && !o.isLight)
-        .forEach((o) => scene.remove(o));
+      if (placedModel) scene.remove(placedModel);
       if (placedAnchor) { placedAnchor.delete(); placedAnchor = null; }
-      placedModel = null;
       lastHitResult = null;
       reticle.visible = false;
     };
