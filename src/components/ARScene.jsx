@@ -22,6 +22,11 @@ export default function ARScene() {
     const hemi = new THREE.HemisphereLight(0xffffff, 0xbbbbff, 3);
     hemi.position.set(0.5, 1, 0.25);
     scene.add(hemi);
+    // Extra directional light so model is clearly lit from all sides
+    const dirLight = new THREE.DirectionalLight(0xffffff, 3);
+    dirLight.position.set(2, 4, 3);
+    scene.add(dirLight);
+    scene.add(new THREE.AmbientLight(0xffffff, 1.5));
 
     const camera = new THREE.PerspectiveCamera(
       70, window.innerWidth / window.innerHeight, 0.01, 20
@@ -57,28 +62,45 @@ export default function ARScene() {
       const size = new THREE.Vector3();
       box.getSize(size);
       const maxDim = Math.max(size.x, size.y, size.z);
-      model.userData.s = maxDim > 0 ? 0.25 / maxDim : 1;
+      // Target 0.40m (40cm) — a food dish should be clearly visible in AR.
+      // Previous 0.25m was too small; food plates are ~25-30cm real size,
+      // so 40cm gives a clear, realistic-looking object.
+      model.userData.s = maxDim > 0 ? 0.40 / maxDim : 1;
+      console.log(`✅ GLB ready. size=${maxDim.toFixed(3)} → scale=${model.userData.s.toFixed(3)}`);
       model.traverse((c) => {
         if (c.isMesh) {
           c.frustumCulled = false;
           if (c.material) { c.material.side = THREE.DoubleSide; c.material.needsUpdate = true; }
         }
       });
-      console.log("✅ GLB ready");
     }, undefined, (e) => console.error("❌ GLB:", e));
 
-    // ── Controller — Three.js XR tap approach (not session.select) ─
+    // ── Controller — Three.js XR tap approach ────────────────────
     const controller = renderer.xr.getController(0);
     controller.addEventListener("select", () => {
-      if (!model || !reticle.visible) return;
+      if (!model) { console.warn("⚠️ Model not loaded"); return; }
+
       const clone = skeletonClone(model);
-      const s = model.userData.s ?? 0.25;
+      const s = model.userData.s ?? 1;
       clone.scale.set(s, s, s);
-      clone.position.setFromMatrixPosition(reticle.matrix);
-      clone.quaternion.setFromRotationMatrix(reticle.matrix);
+
+      if (reticle.visible) {
+        // Best case: surface detected — place exactly on it
+        clone.position.setFromMatrixPosition(reticle.matrix);
+        clone.quaternion.setFromRotationMatrix(reticle.matrix);
+      } else {
+        // Fallback: no surface yet — place 1.2m in front of camera
+        const camPos = new THREE.Vector3();
+        const camDir = new THREE.Vector3();
+        renderer.xr.getCamera().getWorldPosition(camPos);
+        renderer.xr.getCamera().getWorldDirection(camDir);
+        clone.position.copy(camPos).addScaledVector(camDir, 1.2);
+        console.warn("⚠️ No surface — placed 1.2m in front of camera");
+      }
+
       clone.traverse((c) => { if (c.isMesh) c.frustumCulled = false; });
       scene.add(clone);
-      console.log("✅ Placed");
+      console.log("✅ Placed at", clone.position);
     });
     scene.add(controller);
 
