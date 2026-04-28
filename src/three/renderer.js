@@ -5,20 +5,27 @@ export function createRenderer(container) {
 
   const renderer = new THREE.WebGLRenderer({
     antialias: true,
-    alpha: true,       // needed for transparent canvas (AR passthrough)
+    alpha: true,            // transparent canvas → AR camera shows through
     powerPreference: "high-performance",
   });
 
   renderer.setSize(window.innerWidth, window.innerHeight);
   renderer.setPixelRatio(window.devicePixelRatio);
 
-  // 🔥 CRITICAL: transparent clear color so camera feed shows through
-  // Without this, the WebGL canvas renders solid BLACK over the camera.
+  // ✅ CRITICAL: transparent background so the camera passthrough is visible
   renderer.setClearColor(0x000000, 0);
 
-  // 🔥 THIS enables WebXR
+  // ✅ CRITICAL for GLTF/GLB with PBR materials:
+  // Without sRGB color space, textures render washed out or pitch-black.
+  renderer.outputColorSpace = THREE.SRGBColorSpace;
+
+  // ✅ Tone mapping makes PBR materials look physically correct in AR
+  renderer.toneMapping = THREE.ACESFilmicToneMapping;
+  renderer.toneMappingExposure = 1.5;
+
+  // Enable WebXR
   renderer.xr.enabled = true;
-  console.log("✅ XR enabled on renderer");
+  console.log("✅ Renderer ready (XR + sRGB + tone mapping)");
 
   container.appendChild(renderer.domElement);
 
