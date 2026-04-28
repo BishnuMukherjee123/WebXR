@@ -3,9 +3,11 @@
 
 html, body { width: 100%; height: 100%; overflow: hidden; }
 
-/* NO background on body — body is the dom-overlay host parent.
-   If body has background:#000 it shows as a black layer over the camera feed. */
-body { background: transparent; }
+/* Dark background for the landing page.
+   Safe to use #000 here because the domOverlay root is #ar-overlay (a
+   separate transparent div), NOT document.body — so this colour never
+   appears as an overlay on top of the camera feed during AR. */
+body { background: #000; }
 
 #root {
   width: 100%;
