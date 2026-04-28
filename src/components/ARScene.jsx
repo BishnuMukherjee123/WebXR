@@ -53,17 +53,9 @@ export default function ARScene() {
     SceneLoader.ImportMeshAsync("", MODEL_URL, "", scene).then((result) => {
       modelRoot = result.meshes[0];
       
-      // Babylon has a built-in function to perfectly center geometry and remove offsets
-      // MUST be called while the mesh is still enabled so bounding boxes are valid!
-      modelRoot.normalizeToUnitCube();
-      
-      // normalizeToUnitCube makes the largest dimension exactly 1 unit (1 meter).
-      // Scale it down to realistic real-world size (approx 35cm)
-      modelRoot.scaling.scaleInPlace(0.35);
-      
-      // normalizeToUnitCube centers the model at Y=0 based on its bounding box.
-      // To make the bottom of the plate touch the floor, we shift it up by half its scaled height.
-      modelRoot.position.y += (0.5 * 0.35);
+      // Strictly match the scaling from the original Three.js implementation.
+      // Avoid normalizeToUnitCube to prevent unintended geometry offsets or bounding box glitches.
+      modelRoot.scaling = new Vector3(0.35, 0.35, 0.35);
       
       // Now disable it until an anchor is placed
       modelRoot.setEnabled(false);
