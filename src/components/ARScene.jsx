@@ -48,7 +48,8 @@ export default function ARScene() {
     );
     reticle.matrixAutoUpdate = false;
     reticle.visible = false;
-    scene.add(reticle);
+    // We intentionally DO NOT add the reticle to the scene per user request (make it invisible),
+    // but we still use its math object for hit-testing coordinates.
 
     // ── Load GLB ─────────────────────────────────────────────────
     let model = null;
@@ -121,32 +122,43 @@ export default function ARScene() {
         if (c.isMesh) c.frustumCulled = false;
       });
 
+      // 1. Create an independent anchor root. This tracks the floor anchor (handles drift & tilt).
+      const anchorRoot = new THREE.Group();
+      scene.add(anchorRoot);
+      anchorRoot.add(clone);
+      placedModel = anchorRoot;
+
+      const xrCam = renderer.xr.getCamera();
+
       if (reticle.visible && lastHitResult) {
         try {
-          // Create anchor at hit test result for physical stability
           placedAnchor = await lastHitResult.createAnchor();
           console.log("⚓ Anchor created — model is physically locked");
         } catch (e) {
           console.warn("⚠️ Anchors not supported", e);
         }
         
-        clone.position.setFromMatrixPosition(reticle.matrix);
-        clone.quaternion.setFromRotationMatrix(reticle.matrix);
+        anchorRoot.position.setFromMatrixPosition(reticle.matrix);
+        anchorRoot.quaternion.setFromRotationMatrix(reticle.matrix);
       } else {
         // ── Fallback: 1.2 m in front of the XR camera ─────────────
-        const xrCam = renderer.xr.getCamera();
-        clone.position.setFromMatrixPosition(xrCam.matrixWorld);
+        anchorRoot.position.setFromMatrixPosition(xrCam.matrixWorld);
         
         const camDir = new THREE.Vector3(0, 0, -1);
         camDir.transformDirection(xrCam.matrixWorld);
-        clone.position.addScaledVector(camDir, 1.2);
+        anchorRoot.position.addScaledVector(camDir, 1.2);
         
-        clone.quaternion.setFromRotationMatrix(xrCam.matrixWorld);
+        anchorRoot.quaternion.setFromRotationMatrix(xrCam.matrixWorld);
         console.warn("⚠️ No surface — placed 1.2m in front of camera");
       }
 
-      scene.add(clone);
-      placedModel = clone;
+      // 2. Make the dish "face" the camera. 
+      // The anchorRoot tracks the floor's physical tilt, so we only rotate the inner clone 
+      // like a lazy-susan (Y-axis) to point its front side toward the user.
+      anchorRoot.updateMatrixWorld(true);
+      const camPosLocal = anchorRoot.worldToLocal(new THREE.Vector3().setFromMatrixPosition(xrCam.matrixWorld));
+      camPosLocal.y = 0; // Keep it perfectly flat relative to the anchor's floor
+      clone.lookAt(camPosLocal);
     });
     scene.add(controller);
 
