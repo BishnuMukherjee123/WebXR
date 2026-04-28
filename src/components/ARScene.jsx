@@ -8,69 +8,71 @@ export default function ARScene() {
   const containerRef = useRef();
 
   useEffect(() => {
-    const container = containerRef.current;
+    // ─────────────────────────────────────────────────────────────
+    // Follows the official Three.js webxr_ar_hittest.html example
+    // exactly — nothing more, nothing less — to guarantee the camera
+    // passthrough works before adding GLB on top.
+    // ─────────────────────────────────────────────────────────────
 
-    // ── Scene ─────────────────────────────────────────────────────
     const scene = new THREE.Scene();
-    let controller1, controller2, reticle;
-    let preloadedModel = null;
-    let hitTestSource = null;
-    let hitTestSourceRequested = false;
 
-    // ── Lights ────────────────────────────────────────────────────
+    // Camera — same near/far as official example
+    const camera = new THREE.PerspectiveCamera(
+      70, window.innerWidth / window.innerHeight, 0.01, 20
+    );
+
+    // Lights
     const hemiLight = new THREE.HemisphereLight(0xffffff, 0xbbbbff, 3);
     hemiLight.position.set(0.5, 1, 0.25);
     scene.add(hemiLight);
+
     const dirLight = new THREE.DirectionalLight(0xffffff, 2);
     dirLight.position.set(1, 3, 2);
     scene.add(dirLight);
 
-    // ── Camera ────────────────────────────────────────────────────
-    const camera = new THREE.PerspectiveCamera(70, window.innerWidth / window.innerHeight, 0.01, 20);
-
-    // ── Renderer ──────────────────────────────────────────────────
-    // alpha: true  → canvas has alpha channel (transparent where nothing is drawn)
-    // premultipliedAlpha: false → required on Android Chrome for correct AR blending
-    const renderer = new THREE.WebGLRenderer({
-      antialias: true,
-      alpha: true,
-      premultipliedAlpha: false,
-    });
+    // Renderer — EXACT copy from official example: only antialias + alpha
+    // No setClearColor, no premultipliedAlpha — the official example
+    // does not need these and they can interfere with the compositor.
+    const renderer = new THREE.WebGLRenderer({ antialias: true, alpha: true });
     renderer.setPixelRatio(window.devicePixelRatio);
     renderer.setSize(window.innerWidth, window.innerHeight);
-
-    // CRITICAL: alpha=0 clear color → canvas pixels are transparent where
-    // no 3D content exists, allowing the XR camera feed to show through.
-    renderer.setClearColor(0x000000, 0);
-
-    // Correct PBR rendering for GLTF/GLB models
+    // Only additions for correct GLB/PBR rendering:
     renderer.outputColorSpace = THREE.SRGBColorSpace;
     renderer.toneMapping = THREE.ACESFilmicToneMapping;
     renderer.toneMappingExposure = 1.5;
     renderer.xr.enabled = true;
-    container.appendChild(renderer.domElement);
+    containerRef.current.appendChild(renderer.domElement);
 
-    // ── AR Button ─────────────────────────────────────────────────
-    // CRITICAL: Use a dedicated transparent div as domOverlay root.
-    // Using document.body (which has background:#000) as the root causes
-    // the black background to render as an overlay ON TOP of the camera feed.
-    const arOverlay = document.getElementById("ar-overlay");
-
+    // ARButton — EXACT copy from official example:
+    // No domOverlay, no optionalFeatures — just hit-test.
+    // ARButton creates its own minimal transparent overlay internally.
     const arButton = ARButton.createButton(renderer, {
       requiredFeatures: ["hit-test"],
-      optionalFeatures: ["dom-overlay", "local-floor", "bounded-floor"],
-      domOverlay: { root: arOverlay },
     });
     document.body.appendChild(arButton);
 
-    // ── Controllers / Tap Handler ─────────────────────────────────
+    // Hit-test state
+    let hitTestSource = null;
+    let hitTestSourceRequested = false;
+
+    // Reticle — exact copy from official example
+    const reticle = new THREE.Mesh(
+      new THREE.RingGeometry(0.15, 0.2, 32).rotateX(-Math.PI / 2),
+      new THREE.MeshBasicMaterial({ color: 0xffffff, side: THREE.DoubleSide })
+    );
+    reticle.matrixAutoUpdate = false;
+    reticle.visible = false;
+    scene.add(reticle);
+
+    // Controllers — exact copy from official example
+    let preloadedModel = null;
+
     function onSelect() {
-      if (!reticle || !reticle.visible) return;
-      if (!preloadedModel) {
-        console.warn("⚠️ Model not ready yet");
-        return;
-      }
+      if (!reticle.visible) return;
+      if (!preloadedModel) return;
+
       const model = skeletonClone(preloadedModel);
+      // Official pattern: decompose reticle matrix into model transform
       reticle.matrix.decompose(model.position, model.quaternion, model.scale);
       model.scale.set(0.3, 0.3, 0.3);
       model.traverse((child) => {
@@ -81,27 +83,17 @@ export default function ARScene() {
         }
       });
       scene.add(model);
-      console.log("✅ Model placed at", model.position);
     }
 
-    controller1 = renderer.xr.getController(0);
+    const controller1 = renderer.xr.getController(0);
     controller1.addEventListener("select", onSelect);
     scene.add(controller1);
 
-    controller2 = renderer.xr.getController(1);
+    const controller2 = renderer.xr.getController(1);
     controller2.addEventListener("select", onSelect);
     scene.add(controller2);
 
-    // ── Reticle ───────────────────────────────────────────────────
-    reticle = new THREE.Mesh(
-      new THREE.RingGeometry(0.15, 0.2, 32).rotateX(-Math.PI / 2),
-      new THREE.MeshBasicMaterial({ color: 0xffffff, side: THREE.DoubleSide })
-    );
-    reticle.matrixAutoUpdate = false;
-    reticle.visible = false;
-    scene.add(reticle);
-
-    // ── Preload GLB ───────────────────────────────────────────────
+    // Preload GLB
     new GLTFLoader().load(
       "/models/10.glb",
       (gltf) => {
@@ -112,13 +104,13 @@ export default function ARScene() {
             if (child.material) child.material.needsUpdate = true;
           }
         });
-        console.log("✅ GLB preloaded");
+        console.log("✅ GLB loaded");
       },
       undefined,
-      (err) => console.error("❌ GLB failed:", err)
+      (err) => console.error("❌ GLB error:", err)
     );
 
-    // ── Resize ────────────────────────────────────────────────────
+    // Resize
     function onWindowResize() {
       camera.aspect = window.innerWidth / window.innerHeight;
       camera.updateProjectionMatrix();
@@ -126,49 +118,52 @@ export default function ARScene() {
     }
     window.addEventListener("resize", onWindowResize);
 
-    // ── Animation Loop (official Three.js AR pattern) ─────────────
+    // Animation loop — exact copy from official example
     function animate(timestamp, frame) {
       if (frame) {
         const referenceSpace = renderer.xr.getReferenceSpace();
         const session = renderer.xr.getSession();
 
         if (!hitTestSourceRequested) {
-          session
-            .requestReferenceSpace("viewer")
-            .then((vs) => session.requestHitTestSource({ space: vs }))
-            .then((src) => { hitTestSource = src; });
+          session.requestReferenceSpace("viewer").then((viewerSpace) => {
+            session.requestHitTestSource({ space: viewerSpace }).then((source) => {
+              hitTestSource = source;
+            });
+          });
 
           session.addEventListener("end", () => {
             hitTestSourceRequested = false;
             hitTestSource = null;
           });
+
           hitTestSourceRequested = true;
         }
 
         if (hitTestSource) {
-          const results = frame.getHitTestResults(hitTestSource);
-          if (results.length > 0) {
+          const hitTestResults = frame.getHitTestResults(hitTestSource);
+          if (hitTestResults.length) {
+            const hit = hitTestResults[0];
             reticle.visible = true;
-            reticle.matrix.fromArray(results[0].getPose(referenceSpace).transform.matrix);
+            reticle.matrix.fromArray(hit.getPose(referenceSpace).transform.matrix);
           } else {
             reticle.visible = false;
           }
         }
       }
+
       renderer.render(scene, camera);
     }
 
     renderer.setAnimationLoop(animate);
 
-    // ── Reset ─────────────────────────────────────────────────────
+    // Reset (called from UIOverlay)
     window.resetAR = () => {
-      const keep = new Set([reticle, controller1, controller2]);
-      scene.children
-        .filter((o) => !keep.has(o) && !(o instanceof THREE.Light))
+      const keep = new Set([reticle, controller1, controller2, hemiLight, dirLight]);
+      [...scene.children]
+        .filter((o) => !keep.has(o))
         .forEach((o) => scene.remove(o));
     };
 
-    // ── Cleanup ───────────────────────────────────────────────────
     return () => {
       window.removeEventListener("resize", onWindowResize);
       renderer.setAnimationLoop(null);
@@ -178,9 +173,6 @@ export default function ARScene() {
   }, []);
 
   return (
-    <div
-      ref={containerRef}
-      style={{ position: "fixed", inset: 0, overflow: "hidden" }}
-    />
+    <div ref={containerRef} style={{ position: "fixed", inset: 0 }} />
   );
 }

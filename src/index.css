@@ -1,46 +1,48 @@
-/* ── Reset ───────────────────────────────────────────── */
 *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
 
-html, body { width: 100%; height: 100%; overflow: hidden; }
+html, body { width: 100%; height: 100%; overflow: hidden; background: #000; }
 
-/* Dark background for the landing page.
-   Safe to use #000 here because the domOverlay root is #ar-overlay (a
-   separate transparent div), NOT document.body — so this colour never
-   appears as an overlay on top of the camera feed during AR. */
-body { background: #000; }
+#root { width: 100%; height: 100%; }
 
-#root {
-  width: 100%;
-  height: 100%;
-  position: relative;
-}
+canvas { display: block; touch-action: none; }
 
-canvas {
-  display: block;
-  touch-action: none;
-}
-
-/* ── Dedicated AR overlay: MUST be transparent background ── */
-/* ARButton toggles display on this element (none → '' when AR starts) */
-#ar-overlay {
+/* Hint text */
+.overlay-text {
   position: fixed;
-  inset: 0;
-  background: transparent !important; /* CRITICAL: transparent so camera shows through */
-  pointer-events: none;               /* pass clicks through to canvas by default */
-  z-index: 10;
-  display: none;                      /* hidden until AR session starts */
+  top: 20px;
+  left: 50%;
+  transform: translateX(-50%);
+  color: white;
+  z-index: 999;
+  font-size: 14px;
+  font-weight: 500;
+  white-space: nowrap;
+  pointer-events: none;
+  background: rgba(0,0,0,0.5);
+  padding: 6px 14px;
+  border-radius: 20px;
+  text-shadow: 0 1px 3px rgba(0,0,0,0.8);
 }
 
-/* Allow clicks on interactive children of the overlay */
-#ar-overlay button,
-#ar-overlay a {
-  pointer-events: auto;
+/* Reset button — sits below the ARButton (ARButton is at bottom:20px) */
+.reset-btn {
+  position: fixed;
+  bottom: 80px;
+  left: 50%;
+  transform: translateX(-50%);
+  z-index: 999;
+  padding: 10px 28px;
+  background: rgba(60,60,60,0.85);
+  color: white;
+  border: 1px solid rgba(255,255,255,0.3);
+  border-radius: 6px;
+  font-size: 14px;
+  font-weight: 600;
+  cursor: pointer;
 }
 
-/* ── ARButton injected by Three.js ───────────────────────── */
+/* ARButton (Three.js injects at bottom:20px, width:100px, left:calc(50%-50px)) */
+/* Push ARButton up slightly so it sits below Reset */
 #ARButton {
-  bottom: 80px !important;
-  left: 50% !important;
-  transform: translateX(-50%) !important;
-  z-index: 1000 !important;
+  bottom: 20px !important;
 }
