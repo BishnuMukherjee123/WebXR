@@ -25,6 +25,10 @@ canvas { display: block; touch-action: none; }
   position: fixed;
   top: 16px;
   right: 16px;
+  bottom: auto;      /* safeguard: prevent stretching if bottom is set anywhere */
+  left: auto;
+  width: fit-content;
+  height: auto;
   z-index: 999;
   padding: 8px 18px;
   background: rgba(60,60,60,0.85);
