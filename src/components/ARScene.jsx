@@ -11,7 +11,7 @@ import {
   Quaternion,
   MeshBuilder,
   StandardMaterial,
-  Color3
+  Color3,
 } from "@babylonjs/core";
 import "@babylonjs/loaders/glTF";
 import { SceneLoader } from "@babylonjs/core/Loading/sceneLoader";
@@ -23,13 +23,14 @@ export default function ARScene() {
   const canvasRef = useRef(null);
   const overlayRef = useRef(null);
   const [inSession, setInSession] = useState(false);
+  const [surfaceFound, setSurfaceFound] = useState(false);
   const xrHelperRef = useRef(null);
 
   useEffect(() => {
     const canvas = canvasRef.current;
     if (!canvas) return;
 
-    // ── Engine & Scene ──────────────────────────────────────────────────────
+    // ── Engine & Scene ──────────────────────────────────────────────────
     const engine = new Engine(canvas, true, {
       preserveDrawingBuffer: true,
       stencil: true,
@@ -37,79 +38,84 @@ export default function ARScene() {
     const scene = new Scene(engine);
     scene.clearColor = new Color4(0, 0, 0, 0);
 
-    const hemiLight = new HemisphericLight("hemi", new Vector3(0, 1, 0), scene);
-    hemiLight.intensity = 1.2;
+    new HemisphericLight("hemi", new Vector3(0, 1, 0), scene).intensity = 1.2;
+    const dir = new DirectionalLight("dir", new Vector3(-1, -2, -1), scene);
+    dir.intensity = 0.8;
 
-    const dirLight = new DirectionalLight("dir", new Vector3(-1, -2, -1), scene);
-    dirLight.intensity = 0.8;
+    // ── Mutable placement state ─────────────────────────────────────────
+    let modelRoot = null;       // populated once GLB loads
+    let lastHitResult = null;   // most recent hit-test frame result
+    let isModelPlaced = false;  // true after first confirmed tap
+    let selectCleanup = null;   // function to remove the select listener
 
-    // ── Shared mutable state ────────────────────────────────────────────────
-    let modelRoot = null;       // Set once GLB finishes loading
-    let lastHitResult = null;   // Latest hit-test result (updated every XR frame)
-    let placed = false;         // Has the user locked the model?
-
-    // ── Reticle ─────────────────────────────────────────────────────────────
-    const reticle = MeshBuilder.CreateTorus(
-      "reticle",
-      { diameter: 0.18, thickness: 0.012, tessellation: 32 },
-      scene
-    );
+    // ── Reticle (larger, flat ring on the floor) ────────────────────────
+    const reticle = MeshBuilder.CreateDisc("reticle", { radius: 0.25, tessellation: 48 }, scene);
     reticle.isVisible = false;
     reticle.rotationQuaternion = Quaternion.Identity();
+    reticle.bakeCurrentTransformIntoVertices(); // bake so it lies flat by default
 
     const reticleMat = new StandardMaterial("reticleMat", scene);
     reticleMat.emissiveColor = new Color3(1, 1, 1);
     reticleMat.disableLighting = true;
-    reticleMat.alpha = 0.6;
+    reticleMat.alpha = 0.45;
+    reticleMat.backFaceCulling = false;
     reticle.material = reticleMat;
 
-    // ── Load GLB ────────────────────────────────────────────────────────────
+    // ── Load GLB ────────────────────────────────────────────────────────
     SceneLoader.ImportMeshAsync("", MODEL_URL, "", scene)
       .then((result) => {
         modelRoot = result.meshes[0];
         modelRoot.scaling = new Vector3(0.35, 0.35, 0.35);
-        // Start hidden – use setEnabled so every child mesh in the hierarchy hides
         modelRoot.setEnabled(false);
-        console.log("✅ GLB loaded, total meshes:", result.meshes.length);
+        console.log("✅ GLB loaded, meshes:", result.meshes.length);
       })
       .catch((err) => console.error("❌ GLB load error:", err));
 
-    // ── Place model at a world position ────────────────────────────────────
-    function placeModel(position, rotationQuat) {
+    // ── Lock model at a hit-test position ───────────────────────────────
+    function lockModel(hitResult) {
       if (!modelRoot) {
-        console.warn("⚠️ tap ignored – model not loaded yet");
+        console.warn("⚠️ Model not loaded yet");
         return;
       }
+      const pos = new Vector3();
+      const rot = new Quaternion();
+      hitResult.transformationMatrix.decompose(undefined, rot, pos);
 
-      // Show the whole hierarchy
+      // Show every mesh in the hierarchy
       modelRoot.setEnabled(true);
-      // Force every child mesh visible (guards against lingering isVisible=false)
-      modelRoot.getChildMeshes(false).forEach((m) => {
-        m.isVisible = true;
-      });
+      modelRoot.getChildMeshes(false).forEach((m) => (m.isVisible = true));
 
-      // Position
-      modelRoot.position.copyFrom(position);
+      // Position at the tapped floor point
+      modelRoot.position.copyFrom(pos);
 
-      // Keep the model upright – only inherit the Y rotation from the surface
-      const euler = rotationQuat.toEulerAngles();
-      modelRoot.rotationQuaternion = null;          // switch to euler mode
+      // Only rotate around Y so the model stays upright
+      const euler = rot.toEulerAngles();
+      modelRoot.rotationQuaternion = null;
       modelRoot.rotation = new Vector3(0, euler.y, 0);
 
-      placed = true;
+      // Freeze everything – prevents Babylon recalculating transforms every frame
+      modelRoot.freezeWorldMatrix();
+      modelRoot.getChildMeshes(false).forEach((m) => m.freezeWorldMatrix());
+
+      isModelPlaced = true;
       reticle.isVisible = false;
-      console.log("✅ Model placed at", position.toString());
+      setSurfaceFound(false);
+      console.log("✅ Model locked at", pos.toString());
     }
 
-    // ── Reset ────────────────────────────────────────────────────────────────
+    // ── Reset ───────────────────────────────────────────────────────────
     window.resetAR = () => {
-      placed = false;
+      if (!modelRoot) return;
+      modelRoot.unfreezeWorldMatrix();
+      modelRoot.getChildMeshes(false).forEach((m) => m.unfreezeWorldMatrix());
+      modelRoot.setEnabled(false);
+      isModelPlaced = false;
       lastHitResult = null;
-      if (modelRoot) modelRoot.setEnabled(false);
-      reticle.isVisible = true;
+      setSurfaceFound(false);
+      reticle.isVisible = false;
     };
 
-    // ── WebXR ────────────────────────────────────────────────────────────────
+    // ── WebXR setup ─────────────────────────────────────────────────────
     scene
       .createDefaultXRExperienceAsync({
         uiOptions: {
@@ -119,7 +125,6 @@ export default function ARScene() {
         optionalFeatures: true,
         disableDefaultUI: true,
         disableTeleportation: true,
-        // NOTE: do NOT set disablePointerSelection – it breaks select events
       })
       .then((xr) => {
         xrHelperRef.current = xr;
@@ -131,76 +136,88 @@ export default function ARScene() {
             element: overlayRef.current,
           });
         } catch (e) {
-          console.warn("DOM_OVERLAY not supported:", e);
+          console.warn("DOM_OVERLAY:", e);
         }
 
         // Hit test
         const hitTest = fm.enableFeature(WebXRFeatureName.HIT_TEST, "latest");
 
-        // ── Session state ─────────────────────────────────────────────────
-        xr.baseExperience.onStateChangedObservable.add((state) => {
-          const active = state === WebXRState.IN_XR;
-          setInSession(active);
-          if (!active) {
-            // Tidy up when the session ends
-            placed = false;
-            lastHitResult = null;
-            reticle.isVisible = false;
-            if (modelRoot) modelRoot.setEnabled(false);
-          }
-        });
-
-        // ── Hit-test: update reticle & cache result ───────────────────────
+        // Update reticle and cache hit result every frame
         hitTest.onHitTestResultObservable.add((results) => {
+          if (isModelPlaced) {
+            // Model is locked – ignore all future hit tests
+            reticle.isVisible = false;
+            return;
+          }
+
           if (results.length > 0) {
             lastHitResult = results[0];
+            reticle.isVisible = true;
+            setSurfaceFound(true);
 
-            if (!placed) {
-              reticle.isVisible = true;
-              const pos = new Vector3();
-              const rot = new Quaternion();
-              results[0].transformationMatrix.decompose(undefined, rot, pos);
-              reticle.position.copyFrom(pos);
-              reticle.rotationQuaternion.copyFrom(rot);
-            }
+            const pos = new Vector3();
+            const rot = new Quaternion();
+            results[0].transformationMatrix.decompose(undefined, rot, pos);
+            reticle.position.copyFrom(pos);
+
+            // Lay the disc flat on the surface
+            const surfaceRot = rot.clone();
+            reticle.rotationQuaternion.copyFrom(surfaceRot);
           } else {
             lastHitResult = null;
-            if (!placed) reticle.isVisible = false;
+            reticle.isVisible = false;
+            setSurfaceFound(false);
           }
         });
 
-        // ── Tap: use the native WebXR 'select' event ──────────────────────
-        // scene.onPointerObservable does NOT fire for screen taps in
-        // immersive-ar mode.  The correct API is the WebXR session's
-        // 'select' event, which fires once per deliberate tap/click.
-        xr.baseExperience.sessionManager.onXRSessionInit.add(() => {
-          xr.baseExperience.sessionManager.session.addEventListener(
-            "select",
-            () => {
-              if (placed) return;            // already locked – ignore extra taps
+        // ── Attach 'select' listener when session goes IN_XR ─────────
+        // We use onStateChangedObservable (NOT onXRSessionInit) because
+        // the session is already initialized by the time our .then() runs.
+        xr.baseExperience.onStateChangedObservable.add((state) => {
+          if (state === WebXRState.IN_XR) {
+            setInSession(true);
+
+            // Attach native WebXR tap listener
+            const session = xr.baseExperience.sessionManager.session;
+            const onSelect = () => {
+              if (isModelPlaced) return;  // already locked, ignore
               if (!lastHitResult) {
-                console.warn("⚠️ select fired but no hit result cached");
+                console.warn("⚠️ Tapped but no surface detected yet");
                 return;
               }
-
-              const pos = new Vector3();
-              const rot = new Quaternion();
-              lastHitResult.transformationMatrix.decompose(undefined, rot, pos);
-              placeModel(pos, rot);
+              lockModel(lastHitResult);
+            };
+            session.addEventListener("select", onSelect);
+            selectCleanup = () => session.removeEventListener("select", onSelect);
+            console.log("✅ select listener attached");
+          } else {
+            // Session ended or exiting
+            setInSession(false);
+            setSurfaceFound(false);
+            isModelPlaced = false;
+            lastHitResult = null;
+            reticle.isVisible = false;
+            if (modelRoot) {
+              modelRoot.unfreezeWorldMatrix();
+              modelRoot.getChildMeshes(false).forEach((m) => m.unfreezeWorldMatrix());
+              modelRoot.setEnabled(false);
             }
-          );
-          console.log("✅ Native 'select' listener attached to XR session");
+            if (selectCleanup) {
+              selectCleanup();
+              selectCleanup = null;
+            }
+          }
         });
       })
       .catch((err) => console.error("❌ XR setup error:", err));
 
-    // ── Render loop ─────────────────────────────────────────────────────────
+    // ── Render loop ─────────────────────────────────────────────────────
     engine.runRenderLoop(() => scene.render());
-
     const onResize = () => engine.resize();
     window.addEventListener("resize", onResize);
 
     return () => {
+      if (selectCleanup) selectCleanup();
       window.removeEventListener("resize", onResize);
       engine.dispose();
     };
@@ -221,15 +238,10 @@ export default function ARScene() {
         }}
       />
 
-      {/* DOM Overlay (visible inside AR session) */}
+      {/* DOM Overlay */}
       <div
         ref={overlayRef}
-        style={{
-          position: "fixed",
-          inset: 0,
-          pointerEvents: "none",
-          zIndex: 10,
-        }}
+        style={{ position: "fixed", inset: 0, pointerEvents: "none", zIndex: 10 }}
       >
         {inSession && (
           <>
@@ -239,17 +251,19 @@ export default function ARScene() {
                 top: 20,
                 left: "50%",
                 transform: "translateX(-50%)",
-                background: "rgba(0,0,0,0.55)",
+                background: "rgba(0,0,0,0.6)",
                 color: "#fff",
-                padding: "6px 20px",
-                borderRadius: 20,
-                fontSize: 13,
+                padding: "8px 22px",
+                borderRadius: 24,
+                fontSize: 14,
                 fontWeight: 500,
                 whiteSpace: "nowrap",
-                backdropFilter: "blur(8px)",
+                backdropFilter: "blur(10px)",
               }}
             >
-              Point at a surface · Tap to place
+              {surfaceFound
+                ? "✅ Surface found · Tap to place"
+                : "🔍 Slowly move camera to scan the floor…"}
             </div>
             <button
               onClick={() => window.resetAR?.()}
@@ -275,7 +289,7 @@ export default function ARScene() {
         )}
       </div>
 
-      {/* Landing screen (before AR session starts) */}
+      {/* Landing screen */}
       {!inSession && (
         <div
           style={{
@@ -296,12 +310,14 @@ export default function ARScene() {
             style={{
               color: "#aaa",
               fontSize: 14,
-              marginBottom: 24,
+              marginBottom: 28,
               textAlign: "center",
               maxWidth: 300,
+              lineHeight: 1.6,
             }}
           >
-            Powered by Babylon.js · Tap a surface to place your model
+            Point your camera at a flat surface.<br />
+            When the white circle appears, tap to place.
           </p>
           <button
             onClick={() => {
@@ -310,11 +326,11 @@ export default function ARScene() {
                   .enterXRAsync("immersive-ar", "local-floor")
                   .catch(console.error);
               } else {
-                alert("AR engine is still loading. Please wait a moment.");
+                alert("AR engine is still loading, please wait a moment.");
               }
             }}
             style={{
-              padding: "14px 32px",
+              padding: "14px 36px",
               background: "#fff",
               color: "#000",
               border: "none",
