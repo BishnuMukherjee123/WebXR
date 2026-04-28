@@ -1,57 +1,38 @@
-.overlay-btn {
-  position: fixed;
-  z-index: 999;
-  padding: 12px 20px;
-  border: none;
-  border-radius: 8px;
-  font-size: 16px;
-  font-weight: bold;
-  cursor: pointer;
-  transition: all 0.3s ease;
-}
-
-/* Start button */
-.start-btn {
-  bottom: 80px;
-  left: 50%;
-  transform: translateX(-50%);
-  background: #00cc44;
-  color: white;
-}
-
-.start-btn:hover:not(:disabled) {
-  background: #00aa33;
-  transform: translateX(-50%) scale(1.05);
-}
-
-.start-btn:disabled {
-  background: #0088ff;
-  cursor: not-allowed;
-  opacity: 0.9;
-}
-
-/* Reset button */
-.reset-btn {
-  bottom: 20px;
-  left: 50%;
-  transform: translateX(-50%);
-  background: #888888;
-  color: white;
-}
-
-.reset-btn:hover {
-  background: #666666;
-  transform: translateX(-50%) scale(1.05);
-}
-
 .overlay-text {
   position: fixed;
   top: 20px;
   left: 50%;
   transform: translateX(-50%);
   color: white;
-  z-index: 999;
+  z-index: 1001;
   font-size: 14px;
-  text-shadow: 0 2px 4px rgba(0, 0, 0, 0.7);
+  text-shadow: 0 2px 4px rgba(0, 0, 0, 0.8);
   font-weight: 500;
+  white-space: nowrap;
+  pointer-events: none;
+  background: rgba(0, 0, 0, 0.45);
+  padding: 6px 14px;
+  border-radius: 20px;
+}
+
+/* Reset button — sits BELOW the ARButton (ARButton is at bottom:80px via index.css) */
+.reset-btn {
+  position: fixed;
+  bottom: 20px;
+  left: 50%;
+  transform: translateX(-50%);
+  z-index: 1001;
+  padding: 10px 28px;
+  background: rgba(80, 80, 80, 0.85);
+  color: white;
+  border: 1px solid rgba(255,255,255,0.3);
+  border-radius: 6px;
+  font-size: 14px;
+  font-weight: 600;
+  cursor: pointer;
+  letter-spacing: 0.05em;
+}
+
+.reset-btn:hover {
+  background: rgba(100, 100, 100, 0.95);
 }
