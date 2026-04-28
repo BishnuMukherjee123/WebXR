@@ -10,7 +10,10 @@ import {
   WebXRState,
   TransformNode,
   Quaternion,
-  PointerEventTypes
+  PointerEventTypes,
+  MeshBuilder,
+  StandardMaterial,
+  Color3
 } from "@babylonjs/core";
 import "@babylonjs/loaders/glTF";
 import { SceneLoader } from "@babylonjs/core/Loading/sceneLoader";
@@ -49,7 +52,6 @@ export default function ARScene() {
     // ── Load GLB Model ───────────────────────────────────────────────
     SceneLoader.ImportMeshAsync("", MODEL_URL, "", scene).then((result) => {
       modelRoot = result.meshes[0];
-      modelRoot.isVisible = false;
       modelRoot.setEnabled(false);
       
       // Babylon has a built-in function to perfectly center geometry and remove offsets
@@ -95,11 +97,27 @@ export default function ARScene() {
       });
 
       // Track the latest hit test silently
+      const reticle = MeshBuilder.CreateTorus("reticle", { diameter: 0.15, thickness: 0.015, tessellation: 32 }, scene);
+      reticle.isVisible = false;
+      
+      const reticleMat = new StandardMaterial("reticleMat", scene);
+      reticleMat.emissiveColor = new Color3(1, 1, 1);
+      reticleMat.disableLighting = true;
+      reticleMat.alpha = 0.5;
+      reticle.material = reticleMat;
+
       hitTest.onHitTestResultObservable.add((results) => {
         if (results.length > 0) {
           lastHitTest = results[0];
+          reticle.isVisible = true;
+          
+          if (!reticle.rotationQuaternion) {
+            reticle.rotationQuaternion = Quaternion.Identity();
+          }
+          results[0].transformationMatrix.decompose(reticle.scaling, reticle.rotationQuaternion, reticle.position);
         } else {
           lastHitTest = null;
+          reticle.isVisible = false;
         }
       });
 
