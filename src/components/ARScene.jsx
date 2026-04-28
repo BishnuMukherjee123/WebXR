@@ -59,26 +59,20 @@ export default function ARScene() {
     gltfLoader.load(MODEL_URL, (gltf) => {
       let rawModel = gltf.scene;
       
-      // 1. Initial Bounding Box
-      let box = new THREE.Box3().setFromObject(rawModel);
+      // 1. Calculate Bounding Box strictly using VISIBLE geometry
+      // This prevents invisible nodes/lights from creating a huge hovering offset
+      rawModel.updateMatrixWorld(true);
+      let box = new THREE.Box3();
+      rawModel.traverse((c) => {
+        if (c.isMesh && c.visible) {
+          box.expandByObject(c);
+        }
+      });
+      
       let size = new THREE.Vector3();
       box.getSize(size);
 
-      // 2. Auto-orient: A food dish/plate should be flat. 
-      // If its thinnest dimension is Z or X, it was exported sideways!
-      if (size.z < size.y && size.z < size.x) {
-        rawModel.rotation.x = -Math.PI / 2;
-        rawModel.updateMatrixWorld(true);
-        box.setFromObject(rawModel);
-        box.getSize(size);
-      } else if (size.x < size.y && size.x < size.z) {
-        rawModel.rotation.z = Math.PI / 2;
-        rawModel.updateMatrixWorld(true);
-        box.setFromObject(rawModel);
-        box.getSize(size);
-      }
-
-      // 3. Auto-center: Many GLBs have origins meters away from the actual geometry.
+      // 2. Auto-center: Fix origin offsets
       const center = box.getCenter(new THREE.Vector3());
       
       // Shift geometry so its center X/Z is at 0, and its absolute bottom Y rests exactly at 0
@@ -86,11 +80,11 @@ export default function ARScene() {
       rawModel.position.y -= box.min.y;
       rawModel.position.z -= center.z;
 
-      // 4. Wrap in a clean pivot group
+      // 3. Wrap in a clean pivot group
       const wrapper = new THREE.Group();
       wrapper.add(rawModel);
 
-      // 5. Calculate final scale based on the corrected bounding box
+      // 4. Calculate final scale
       const maxDim = Math.max(size.x, size.y, size.z);
       // Target 0.35m (35cm) for a realistic plate size
       wrapper.userData.s = maxDim > 0 ? 0.35 / maxDim : 1;
@@ -103,17 +97,20 @@ export default function ARScene() {
       });
 
       model = wrapper;
-      console.log(`✅ GLB centered and oriented. targetScale=${wrapper.userData.s.toFixed(3)}`);
+      console.log(`✅ GLB centered. targetScale=${wrapper.userData.s.toFixed(3)}`);
     }, undefined, (e) => console.error("❌ GLB:", e));
 
     let placedModel = null;
+    let placedAnchor = null;
+    let lastHitResult = null;
 
     const controller = renderer.xr.getController(0);
-    controller.addEventListener("select", () => {
+    controller.addEventListener("select", async () => {
       if (!model) { console.warn("⚠️ Model not loaded"); return; }
 
-      // Remove previous model
+      // Remove previous model and anchor
       if (placedModel) { scene.remove(placedModel); placedModel = null; }
+      if (placedAnchor) { placedAnchor.delete(); placedAnchor = null; }
 
       const clone = skeletonClone(model);
       const s = model.userData.s ?? 1;
@@ -124,15 +121,17 @@ export default function ARScene() {
         if (c.isMesh) c.frustumCulled = false;
       });
 
-      if (reticle.visible) {
-        // ── Primary path: place exactly at the detected surface ───
-        // We do not use XR Anchors here because anchors update every frame 
-        // as ARCore refines its SLAM map, which causes visual trembling.
-        // By just reading the reticle matrix once, the object is mathematically 
-        // frozen in the virtual room.
+      if (reticle.visible && lastHitResult) {
+        try {
+          // Create anchor at hit test result for physical stability
+          placedAnchor = await lastHitResult.createAnchor();
+          console.log("⚓ Anchor created — model is physically locked");
+        } catch (e) {
+          console.warn("⚠️ Anchors not supported", e);
+        }
+        
         clone.position.setFromMatrixPosition(reticle.matrix);
         clone.quaternion.setFromRotationMatrix(reticle.matrix);
-        console.log("✅ Placed on surface (frozen)");
       } else {
         // ── Fallback: 1.2 m in front of the XR camera ─────────────
         const xrCam = renderer.xr.getCamera();
@@ -154,7 +153,7 @@ export default function ARScene() {
     // ── AR Button ────────────────────────────────────────────────
     const btn = ARButton.createButton(renderer, {
       requiredFeatures: ["hit-test"],
-      optionalFeatures: ["dom-overlay"],
+      optionalFeatures: ["dom-overlay", "anchors"],
       domOverlay: { root: overlay },
     });
     document.body.appendChild(btn);
@@ -165,6 +164,8 @@ export default function ARScene() {
       hitTestSource = null;
       hitTestSourceRequested = false;
       reticle.visible = false;
+      lastHitResult = null;
+      if (placedAnchor) { placedAnchor.delete(); placedAnchor = null; }
       setInSession(false);
     });
 
@@ -199,11 +200,23 @@ export default function ARScene() {
             const pose = results[0].getPose(refSpace);
             reticle.visible = true;
             reticle.matrix.fromArray(pose.transform.matrix);
+            lastHitResult = results[0];
           } else {
             reticle.visible = false;
+            lastHitResult = null;
           }
         }
-        // No per-frame model updates. The model is 100% static in local-floor space.
+        
+        // ── Direct Anchor Tracking ─────────────────────────────────
+        // Lock the model perfectly to the anchor without lerping.
+        // This stops it from "running away" as ARCore tracks the room.
+        if (placedAnchor && placedModel && frame.trackedAnchors?.has(placedAnchor)) {
+          const pose = frame.getPose(placedAnchor.anchorSpace, refSpace);
+          if (pose) {
+            placedModel.position.setFromMatrixPosition(pose.transform.matrix);
+            placedModel.quaternion.setFromRotationMatrix(pose.transform.matrix);
+          }
+        }
       }
       renderer.render(scene, camera);
     });
@@ -221,7 +234,9 @@ export default function ARScene() {
       [...scene.children]
         .filter((o) => o !== reticle && o !== controller && !o.isLight)
         .forEach((o) => scene.remove(o));
+      if (placedAnchor) { placedAnchor.delete(); placedAnchor = null; }
       placedModel = null;
+      lastHitResult = null;
       reticle.visible = false;
     };
 
