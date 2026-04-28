@@ -1,7 +1,17 @@
 *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
-html, body { width: 100%; height: 100%; overflow: hidden; background: #000; }
-#root { width: 100%; height: 100%; }
-canvas { display: block; touch-action: none; }
+
+html, body {
+  width: 100%;
+  height: 100%;
+  overflow: hidden;
+  background: #000;
+}
+
+#root {
+  width: 100%;
+  height: 100%;
+  position: relative;
+}
 
 /* Hint text — top center */
 .overlay-text {
@@ -10,34 +20,39 @@ canvas { display: block; touch-action: none; }
   left: 50%;
   transform: translateX(-50%);
   color: white;
-  z-index: 999;
-  font-size: 13px;
+  z-index: 10;
+  font-size: 14px;
   font-weight: 500;
   white-space: nowrap;
   pointer-events: none;
-  background: rgba(0,0,0,0.55);
-  padding: 5px 14px;
+  background: rgba(0, 0, 0, 0.55);
+  padding: 6px 16px;
   border-radius: 20px;
+  font-family: system-ui, sans-serif;
 }
 
-/* Reset — TOP RIGHT, completely away from START AR button at the bottom */
+/* Reset button — top right, never overlaps anything */
 .reset-btn {
   position: fixed;
   top: 16px;
   right: 16px;
-  bottom: auto;      /* safeguard: prevent stretching if bottom is set anywhere */
+  bottom: auto;
   left: auto;
   width: fit-content;
   height: auto;
-  z-index: 999;
+  z-index: 10;
   padding: 8px 18px;
-  background: rgba(60,60,60,0.85);
+  background: rgba(40, 40, 40, 0.85);
   color: white;
-  border: 1px solid rgba(255,255,255,0.3);
-  border-radius: 6px;
+  border: 1px solid rgba(255, 255, 255, 0.3);
+  border-radius: 8px;
   font-size: 13px;
   font-weight: 600;
   cursor: pointer;
+  font-family: system-ui, sans-serif;
+  backdrop-filter: blur(4px);
 }
 
-/* ARButton is at bottom:20px, left:calc(50%-50px) — leave it there */
+.reset-btn:active {
+  background: rgba(80, 80, 80, 0.9);
+}

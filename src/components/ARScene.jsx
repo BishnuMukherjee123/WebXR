@@ -5,149 +5,67 @@ import { GLTFLoader } from "three/addons/loaders/GLTFLoader.js";
 
 export default function ARScene() {
   const containerRef = useRef();
+  const videoRef = useRef();
 
   useEffect(() => {
+    const container = containerRef.current;
+    const video = videoRef.current;
+
+    // ── 1. CAMERA FEED via getUserMedia (stays inside browser) ────
+    let stream = null;
+    navigator.mediaDevices
+      .getUserMedia({ video: { facingMode: "environment", width: { ideal: 1280 }, height: { ideal: 720 } } })
+      .then((s) => {
+        stream = s;
+        video.srcObject = s;
+        video.play();
+      })
+      .catch((err) => console.error("❌ Camera error:", err));
+
+    // ── 2. THREE.JS SCENE ─────────────────────────────────────────
     const scene = new THREE.Scene();
-    let hitTestSource = null;
-    let hitTestSourceRequested = false;
-    let reticle, controller1, controller2;
-    let preloadedModel = null;
-    let currentSession = null;
 
-    // ── Lights ────────────────────────────────────────────────────
-    const hemiLight = new THREE.HemisphereLight(0xffffff, 0xbbbbff, 3);
-    hemiLight.position.set(0.5, 1, 0.25);
-    scene.add(hemiLight);
-    const dirLight = new THREE.DirectionalLight(0xffffff, 2);
-    dirLight.position.set(1, 3, 2);
-    scene.add(dirLight);
+    // Lights
+    scene.add(new THREE.HemisphereLight(0xffffff, 0xbbbbff, 3));
+    const dir = new THREE.DirectionalLight(0xffffff, 2);
+    dir.position.set(1, 3, 2);
+    scene.add(dir);
 
-    // ── Camera ────────────────────────────────────────────────────
+    // ── 3. CAMERA (Three.js) ──────────────────────────────────────
+    // Positioned at eye-height (1.5m), looking slightly down toward table
     const camera = new THREE.PerspectiveCamera(
-      70, window.innerWidth / window.innerHeight, 0.01, 20
+      60, window.innerWidth / window.innerHeight, 0.01, 100
     );
+    camera.position.set(0, 1.5, 0);
+    camera.lookAt(0, 0, -2);
 
-    // ── Renderer ──────────────────────────────────────────────────
+    // ── 4. RENDERER — transparent canvas ON TOP of video ──────────
     const renderer = new THREE.WebGLRenderer({ antialias: true, alpha: true });
     renderer.setPixelRatio(window.devicePixelRatio);
     renderer.setSize(window.innerWidth, window.innerHeight);
-    renderer.setClearColor(0x000000, 0); // transparent so camera feed shows through
+    renderer.setClearColor(0x000000, 0); // fully transparent — video shows through
     renderer.outputColorSpace = THREE.SRGBColorSpace;
     renderer.toneMapping = THREE.ACESFilmicToneMapping;
     renderer.toneMappingExposure = 1.5;
-    renderer.xr.enabled = true;
-    containerRef.current.appendChild(renderer.domElement);
+    container.appendChild(renderer.domElement);
 
-    // ── Custom START AR button ────────────────────────────────────
-    // We do NOT use Three.js ARButton because it calls navigator.xr.offerSession()
-    // which redirects the user OUTSIDE the browser to an external AR viewer.
-    // We call navigator.xr.requestSession() directly to keep AR inside Chrome.
-    const button = document.createElement("button");
-    button.id = "ARButton";
-    button.textContent = "START AR";
-    Object.assign(button.style, {
-      position: "fixed",
-      bottom: "20px",
-      left: "50%",
-      transform: "translateX(-50%)",
-      padding: "12px 24px",
-      border: "1px solid #fff",
-      borderRadius: "4px",
-      background: "rgba(0,0,0,0.3)",
-      color: "#fff",
-      font: "bold 14px sans-serif",
-      cursor: "pointer",
-      zIndex: "999",
-      display: "none",
-    });
+    // ── 5. VIRTUAL GROUND PLANE (simulates table/floor surface) ───
+    // A flat invisible plane at y=0 is our "surface"
+    // Ray from tap point → intersects this plane → model placed there
+    const groundPlane = new THREE.Plane(new THREE.Vector3(0, 1, 0), 0);
+    const raycaster = new THREE.Raycaster();
+    const planeIntersect = new THREE.Vector3();
 
-    async function onSessionStarted(session) {
-      session.addEventListener("end", onSessionEnded);
-      // Must set reference space type BEFORE setSession
-      renderer.xr.setReferenceSpaceType("local");
-      await renderer.xr.setSession(session);
-      button.textContent = "STOP AR";
-      currentSession = session;
-    }
-
-    function onSessionEnded() {
-      button.textContent = "START AR";
-      currentSession = null;
-      hitTestSourceRequested = false;
-      hitTestSource = null;
-    }
-
-    button.addEventListener("click", () => {
-      if (!currentSession) {
-        // ✅ requestSession stays inside the browser
-        // ❌ offerSession (used by ARButton) sends user outside to system AR viewer
-        navigator.xr
-          .requestSession("immersive-ar", {
-            requiredFeatures: ["hit-test"],
-            optionalFeatures: ["local-floor"],
-          })
-          .then(onSessionStarted)
-          .catch((e) => console.error("❌ AR session failed:", e));
-      } else {
-        currentSession.end();
-      }
-    });
-
-    // Show button only if immersive-ar is supported
-    if ("xr" in navigator) {
-      navigator.xr.isSessionSupported("immersive-ar").then((supported) => {
-        if (supported) {
-          button.style.display = "block";
-        } else {
-          button.textContent = "AR NOT SUPPORTED";
-          button.style.cursor = "default";
-          button.style.display = "block";
-        }
-      }).catch(() => {
-        button.textContent = "AR NOT AVAILABLE";
-        button.style.display = "block";
-      });
-    } else {
-      button.textContent = window.isSecureContext ? "WEBXR NOT AVAILABLE" : "NEEDS HTTPS";
-      button.style.display = "block";
-    }
-
-    document.body.appendChild(button);
-
-    // ── Reticle ───────────────────────────────────────────────────
-    reticle = new THREE.Mesh(
-      new THREE.RingGeometry(0.15, 0.2, 32).rotateX(-Math.PI / 2),
-      new THREE.MeshBasicMaterial({ color: 0xffffff, side: THREE.DoubleSide })
+    // ── 6. RETICLE (follows finger position on ground plane) ──────
+    const reticle = new THREE.Mesh(
+      new THREE.RingGeometry(0.08, 0.12, 32).rotateX(-Math.PI / 2),
+      new THREE.MeshBasicMaterial({ color: 0x00ffcc, side: THREE.DoubleSide, opacity: 0.8, transparent: true })
     );
-    reticle.matrixAutoUpdate = false;
     reticle.visible = false;
     scene.add(reticle);
 
-    // ── Controllers ───────────────────────────────────────────────
-    function onSelect() {
-      if (!reticle.visible || !preloadedModel) return;
-      const model = skeletonClone(preloadedModel);
-      reticle.matrix.decompose(model.position, model.quaternion, model.scale);
-      model.scale.set(0.3, 0.3, 0.3);
-      model.traverse((child) => {
-        if (child.isMesh) {
-          child.visible = true;
-          child.frustumCulled = false;
-          if (child.material) child.material.needsUpdate = true;
-        }
-      });
-      scene.add(model);
-    }
-
-    controller1 = renderer.xr.getController(0);
-    controller1.addEventListener("select", onSelect);
-    scene.add(controller1);
-
-    controller2 = renderer.xr.getController(1);
-    controller2.addEventListener("select", onSelect);
-    scene.add(controller2);
-
-    // ── Preload GLB ───────────────────────────────────────────────
+    // ── 7. GLB PRELOAD ─────────────────────────────────────────────
+    let preloadedModel = null;
     new GLTFLoader().load(
       "/models/10.glb",
       (gltf) => {
@@ -164,64 +82,167 @@ export default function ARScene() {
       (err) => console.error("❌ GLB error:", err)
     );
 
-    // ── Resize ────────────────────────────────────────────────────
-    function onWindowResize() {
+    // ── 8. DEVICE ORIENTATION → rotate Three.js camera to match phone ──
+    // This makes the 3D scene align with where the phone is pointing
+    let deviceAlpha = 0, deviceBeta = 90, deviceGamma = 0;
+
+    function onOrientation(e) {
+      deviceAlpha = e.alpha ?? 0;
+      deviceBeta  = e.beta  ?? 90;
+      deviceGamma = e.gamma ?? 0;
+    }
+
+    if (window.DeviceOrientationEvent) {
+      // iOS 13+ requires permission
+      if (typeof DeviceOrientationEvent.requestPermission === "function") {
+        DeviceOrientationEvent.requestPermission().then((perm) => {
+          if (perm === "granted") window.addEventListener("deviceorientation", onOrientation);
+        });
+      } else {
+        window.addEventListener("deviceorientation", onOrientation);
+      }
+    }
+
+    // ── 9. TAP HANDLER — place model where user taps ──────────────
+    function getCanvasXY(clientX, clientY) {
+      return {
+        x:  (clientX / window.innerWidth)  * 2 - 1,
+        y: -(clientY / window.innerHeight) * 2 + 1,
+      };
+    }
+
+    function placeModel(clientX, clientY) {
+      if (!preloadedModel) return;
+
+      const { x, y } = getCanvasXY(clientX, clientY);
+      raycaster.setFromCamera({ x, y }, camera);
+
+      // Ray → virtual ground plane intersection
+      if (!raycaster.ray.intersectPlane(groundPlane, planeIntersect)) return;
+
+      const model = skeletonClone(preloadedModel);
+      model.position.copy(planeIntersect);
+      model.scale.set(0.3, 0.3, 0.3);
+      // Face model toward camera
+      model.lookAt(camera.position.x, model.position.y, camera.position.z);
+      model.traverse((child) => {
+        if (child.isMesh) {
+          child.visible = true;
+          child.frustumCulled = false;
+          if (child.material) child.material.needsUpdate = true;
+        }
+      });
+      scene.add(model);
+      reticle.visible = false;
+      console.log("✅ Model placed at", planeIntersect);
+    }
+
+    // Show reticle on pointer move / touch move
+    function updateReticle(clientX, clientY) {
+      const { x, y } = getCanvasXY(clientX, clientY);
+      raycaster.setFromCamera({ x, y }, camera);
+      if (raycaster.ray.intersectPlane(groundPlane, planeIntersect)) {
+        reticle.position.copy(planeIntersect);
+        reticle.visible = true;
+      }
+    }
+
+    // Touch events (mobile)
+    function onTouchStart(e) {
+      e.preventDefault();
+      const t = e.changedTouches[0];
+      placeModel(t.clientX, t.clientY);
+    }
+    function onTouchMove(e) {
+      e.preventDefault();
+      const t = e.changedTouches[0];
+      updateReticle(t.clientX, t.clientY);
+    }
+
+    // Click events (desktop testing)
+    function onClick(e) { placeModel(e.clientX, e.clientY); }
+    function onMouseMove(e) { updateReticle(e.clientX, e.clientY); }
+
+    renderer.domElement.addEventListener("touchstart", onTouchStart, { passive: false });
+    renderer.domElement.addEventListener("touchmove",  onTouchMove,  { passive: false });
+    renderer.domElement.addEventListener("click", onClick);
+    renderer.domElement.addEventListener("mousemove", onMouseMove);
+
+    // ── 10. ANIMATE ───────────────────────────────────────────────
+    // Apply device orientation to Three.js camera so 3D content tracks
+    // where the phone is pointing (critical for realistic AR feel)
+    const euler = new THREE.Euler();
+    const quaternion = new THREE.Quaternion();
+
+    function animate() {
+      requestAnimationFrame(animate);
+
+      // Map device orientation → camera rotation
+      // beta  = tilt up/down (0=flat, 90=upright)
+      // gamma = tilt left/right
+      // alpha = compass heading
+      const betaRad  = THREE.MathUtils.degToRad(deviceBeta  - 90); // -90 so upright phone = looking forward
+      const gammaRad = THREE.MathUtils.degToRad(deviceGamma);
+      const alphaRad = THREE.MathUtils.degToRad(-deviceAlpha);
+
+      euler.set(betaRad, alphaRad, -gammaRad, "YXZ");
+      quaternion.setFromEuler(euler);
+      camera.quaternion.slerp(quaternion, 0.1); // smooth
+
+      renderer.render(scene, camera);
+    }
+
+    animate();
+
+    // ── 11. RESIZE ────────────────────────────────────────────────
+    function onResize() {
       camera.aspect = window.innerWidth / window.innerHeight;
       camera.updateProjectionMatrix();
       renderer.setSize(window.innerWidth, window.innerHeight);
     }
-    window.addEventListener("resize", onWindowResize);
+    window.addEventListener("resize", onResize);
 
-    // ── Animation loop ────────────────────────────────────────────
-    function animate(timestamp, frame) {
-      if (frame) {
-        const referenceSpace = renderer.xr.getReferenceSpace();
-        const session = renderer.xr.getSession();
-
-        if (!hitTestSourceRequested) {
-          session.requestReferenceSpace("viewer").then((vs) => {
-            session.requestHitTestSource({ space: vs }).then((src) => {
-              hitTestSource = src;
-            });
-          });
-          session.addEventListener("end", () => {
-            hitTestSourceRequested = false;
-            hitTestSource = null;
-          });
-          hitTestSourceRequested = true;
-        }
-
-        if (hitTestSource) {
-          const results = frame.getHitTestResults(hitTestSource);
-          if (results.length > 0) {
-            reticle.visible = true;
-            reticle.matrix.fromArray(
-              results[0].getPose(referenceSpace).transform.matrix
-            );
-          } else {
-            reticle.visible = false;
-          }
-        }
-      }
-      renderer.render(scene, camera);
-    }
-
-    renderer.setAnimationLoop(animate);
-
-    // ── Reset ─────────────────────────────────────────────────────
+    // ── 12. RESET ─────────────────────────────────────────────────
     window.resetAR = () => {
-      const keep = new Set([reticle, controller1, controller2, hemiLight, dirLight]);
+      const keep = new Set([reticle, dir, scene.children[0]]); // keep reticle + lights
       [...scene.children].filter((o) => !keep.has(o)).forEach((o) => scene.remove(o));
+      reticle.visible = false;
     };
 
-    // ── Cleanup ───────────────────────────────────────────────────
+    // ── CLEANUP ───────────────────────────────────────────────────
     return () => {
-      window.removeEventListener("resize", onWindowResize);
-      renderer.setAnimationLoop(null);
+      window.removeEventListener("resize", onResize);
+      window.removeEventListener("deviceorientation", onOrientation);
+      renderer.domElement.removeEventListener("touchstart", onTouchStart);
+      renderer.domElement.removeEventListener("touchmove", onTouchMove);
+      renderer.domElement.removeEventListener("click", onClick);
+      renderer.domElement.removeEventListener("mousemove", onMouseMove);
       renderer.dispose();
-      button.remove();
+      if (stream) stream.getTracks().forEach((t) => t.stop());
     };
   }, []);
 
-  return <div ref={containerRef} style={{ position: "fixed", inset: 0 }} />;
+  return (
+    <>
+      {/* Camera feed — sits behind everything */}
+      <video
+        ref={videoRef}
+        playsInline
+        muted
+        style={{
+          position: "fixed",
+          inset: 0,
+          width: "100%",
+          height: "100%",
+          objectFit: "cover",
+          zIndex: 0,
+        }}
+      />
+      {/* Three.js canvas — transparent, sits on top of video */}
+      <div
+        ref={containerRef}
+        style={{ position: "fixed", inset: 0, zIndex: 1 }}
+      />
+    </>
+  );
 }
