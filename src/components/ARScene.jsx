@@ -57,12 +57,15 @@ export default function ARScene() {
       // Babylon has a built-in function to perfectly center geometry and remove offsets
       modelRoot.normalizeToUnitCube();
       
-      // Scale to realistic real-world size (approx 35cm)
-      modelRoot.scaling = new Vector3(0.35, 0.35, 0.35);
+      // normalizeToUnitCube makes the largest dimension exactly 1 unit (1 meter).
+      // Scale it down to realistic real-world size (approx 35cm)
+      modelRoot.scaling.scaleInPlace(0.35);
       
-      // normalizeToUnitCube centers the model at Y=0. 
+      // normalizeToUnitCube centers the model at Y=0 based on its bounding box.
       // To make the bottom of the plate touch the floor, we shift it up by half its scaled height.
-      modelRoot.position.y = 0.5 * 0.35;
+      // Wait, normalizeToUnitCube sets the `position` of the root. 
+      // If we shift it, we must add to its current position!
+      modelRoot.position.y += (0.5 * 0.35);
       
       console.log("✅ Babylon GLB Loaded");
     }).catch(console.error);
