@@ -52,9 +52,9 @@ export default function ARScene() {
     // ── Load GLB Model ───────────────────────────────────────────────
     SceneLoader.ImportMeshAsync("", MODEL_URL, "", scene).then((result) => {
       modelRoot = result.meshes[0];
-      modelRoot.setEnabled(false);
       
       // Babylon has a built-in function to perfectly center geometry and remove offsets
+      // MUST be called while the mesh is still enabled so bounding boxes are valid!
       modelRoot.normalizeToUnitCube();
       
       // normalizeToUnitCube makes the largest dimension exactly 1 unit (1 meter).
@@ -63,9 +63,10 @@ export default function ARScene() {
       
       // normalizeToUnitCube centers the model at Y=0 based on its bounding box.
       // To make the bottom of the plate touch the floor, we shift it up by half its scaled height.
-      // Wait, normalizeToUnitCube sets the `position` of the root. 
-      // If we shift it, we must add to its current position!
       modelRoot.position.y += (0.5 * 0.35);
+      
+      // Now disable it until an anchor is placed
+      modelRoot.setEnabled(false);
       
       console.log("✅ Babylon GLB Loaded");
     }).catch(console.error);
@@ -134,13 +135,6 @@ export default function ARScene() {
         // This locks the model tightly to the real-world tracking without manual math
         anchor.attachedNode = anchorRoot;
         
-        // Ensure the model shows its front side and doesn't rotate automatically
-        if (!modelRoot.rotationQuaternion) {
-          modelRoot.rotationQuaternion = Quaternion.Identity();
-        } else {
-          modelRoot.rotationQuaternion.copyFrom(Quaternion.Identity());
-        }
-
         modelRoot.setEnabled(true);
         console.log("⚓ Babylon Anchor Created and Node Attached");
       });
