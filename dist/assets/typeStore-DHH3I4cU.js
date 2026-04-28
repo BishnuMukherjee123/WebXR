@@ -1,0 +1,1 @@
+var n={};function t(t,r){n[t]=r}function r(t){return n[t]}export{t as n,r as t};

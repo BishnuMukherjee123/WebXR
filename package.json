@@ -10,10 +10,11 @@
     "preview": "vite preview"
   },
   "dependencies": {
+    "@babylonjs/core": "^9.4.1",
+    "@babylonjs/loaders": "^9.4.1",
     "@supabase/supabase-js": "^2.105.0",
     "react": "^19.2.5",
-    "react-dom": "^19.2.5",
-    "three": "^0.184.0"
+    "react-dom": "^19.2.5"
   },
   "devDependencies": {
     "@eslint/js": "^10.0.1",

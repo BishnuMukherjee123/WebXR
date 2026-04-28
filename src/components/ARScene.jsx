@@ -1,271 +1,199 @@
 import { useEffect, useRef, useState } from "react";
-import * as THREE from "three";
-import { ARButton } from "three/addons/webxr/ARButton.js";
-import { GLTFLoader } from "three/addons/loaders/GLTFLoader.js";
-import { DRACOLoader } from "three/addons/loaders/DRACOLoader.js";
+import {
+  Engine,
+  Scene,
+  Vector3,
+  Color4,
+  HemisphericLight,
+  DirectionalLight,
+  WebXRFeatureName,
+  WebXRState,
+  TransformNode,
+  Quaternion,
+  PointerEventTypes
+} from "@babylonjs/core";
+import "@babylonjs/loaders/glTF";
+import { SceneLoader } from "@babylonjs/core/Loading/sceneLoader";
 
-
-const MODEL_URL =
-  "https://iskchovltfnohyftjckg.supabase.co/storage/v1/object/public/models/10.glb";
+const MODEL_URL = "https://iskchovltfnohyftjckg.supabase.co/storage/v1/object/public/models/10.glb";
 
 export default function ARScene() {
-  const mountRef = useRef();
-  const overlayRef = useRef();
+  const canvasRef = useRef(null);
+  const overlayRef = useRef(null);
   const [inSession, setInSession] = useState(false);
+  const xrHelperRef = useRef(null);
 
   useEffect(() => {
-    const mount = mountRef.current;
-    const overlay = overlayRef.current;
+    const canvas = canvasRef.current;
+    if (!canvas) return;
 
-    // ── Scene & lights ───────────────────────────────────────────
-    const scene = new THREE.Scene();
-    const hemi = new THREE.HemisphereLight(0xffffff, 0xbbbbff, 3);
-    hemi.position.set(0.5, 1, 0.25);
-    scene.add(hemi);
-    // Extra directional light so model is clearly lit from all sides
-    const dirLight = new THREE.DirectionalLight(0xffffff, 3);
-    dirLight.position.set(2, 4, 3);
-    scene.add(dirLight);
-    scene.add(new THREE.AmbientLight(0xffffff, 1.5));
+    // ── Setup Babylon Engine ───────────────────────────────────────────
+    const engine = new Engine(canvas, true, { preserveDrawingBuffer: true, stencil: true });
+    const scene = new Scene(engine);
+    
+    // Transparent background for AR pass-through
+    scene.clearColor = new Color4(0, 0, 0, 0);
 
-    const camera = new THREE.PerspectiveCamera(
-      70, window.innerWidth / window.innerHeight, 0.01, 20
-    );
+    const hemiLight = new HemisphericLight("hemiLight", new Vector3(0, 1, 0), scene);
+    hemiLight.intensity = 1.0;
 
-    // ── Renderer — EXACT pattern from Three.js official AR example ──
-    // DO NOT add setClearColor / toneMapping / outputColorSpace here.
-    // The XR compositor handles the camera feed; extras break alpha compositing.
-    const renderer = new THREE.WebGLRenderer({ antialias: true, alpha: true });
-    renderer.setPixelRatio(window.devicePixelRatio);
-    renderer.setSize(window.innerWidth, window.innerHeight);
-    renderer.xr.enabled = true;
-    mount.appendChild(renderer.domElement);
+    const dirLight = new DirectionalLight("dirLight", new Vector3(0, -1, -0.5), scene);
+    dirLight.intensity = 0.8;
 
-    // ── Reticle ──────────────────────────────────────────────────
-    const reticle = new THREE.Mesh(
-      new THREE.RingGeometry(0.10, 0.15, 32).rotateX(-Math.PI / 2),
-      new THREE.MeshBasicMaterial({ color: 0x00ffcc, side: THREE.DoubleSide })
-    );
-    reticle.matrixAutoUpdate = false;
-    reticle.visible = false;
-    // We intentionally DO NOT add the reticle to the scene per user request (make it invisible),
-    // but we still use its math object for hit-testing coordinates.
-
-    // ── Load GLB ─────────────────────────────────────────────────
-    let model = null;
-    const draco = new DRACOLoader();
-    draco.setDecoderPath("https://www.gstatic.com/draco/versioned/decoders/1.5.6/");
-    const gltfLoader = new GLTFLoader();
-    gltfLoader.setDRACOLoader(draco);
-    gltfLoader.load(MODEL_URL, (gltf) => {
-      let rawModel = gltf.scene;
-      
-      // 1. Calculate Bounding Box strictly using VISIBLE geometry
-      // This prevents invisible nodes/lights from creating a huge hovering offset
-      rawModel.updateMatrixWorld(true);
-      let box = new THREE.Box3();
-      rawModel.traverse((c) => {
-        if (c.isMesh && c.visible) {
-          box.expandByObject(c);
-        }
-      });
-      
-      let size = new THREE.Vector3();
-      box.getSize(size);
-
-      // 2. Auto-center: Fix origin offsets
-      const center = box.getCenter(new THREE.Vector3());
-      
-      // Shift geometry so its center X/Z is at 0, and its absolute bottom Y rests exactly at 0
-      rawModel.position.x -= center.x;
-      rawModel.position.y -= box.min.y;
-      rawModel.position.z -= center.z;
-
-      // 3. Wrap in a clean pivot group
-      const wrapper = new THREE.Group();
-      wrapper.add(rawModel);
-
-      // 4. Calculate final scale
-      const maxDim = Math.max(size.x, size.y, size.z);
-      // Target 0.35m (35cm) for a realistic plate size
-      wrapper.userData.s = maxDim > 0 ? 0.35 / maxDim : 1;
-      
-      wrapper.traverse((c) => {
-        if (c.isMesh) {
-          c.frustumCulled = false;
-          if (c.material) { c.material.side = THREE.DoubleSide; c.material.needsUpdate = true; }
-        }
-      });
-
-      model = wrapper;
-      console.log(`✅ GLB centered. targetScale=${wrapper.userData.s.toFixed(3)}`);
-    }, undefined, (e) => console.error("❌ GLB:", e));
-
-    let placedModel = null;
+    let modelRoot = null;
+    let anchorRoot = null;
     let placedAnchor = null;
-    let lastHitResult = null;
-    let isPlacing = false; // Prevent ARCore crash from spam-tapping
+    let lastHitTest = null;
+    let isPlacing = false;
 
-    const controller = renderer.xr.getController(0);
-    controller.addEventListener("select", async () => {
-      if (!model || isPlacing) return;
-      isPlacing = true;
+    // ── Load GLB Model ───────────────────────────────────────────────
+    SceneLoader.ImportMeshAsync("", MODEL_URL, "", scene).then((result) => {
+      modelRoot = result.meshes[0];
+      modelRoot.isVisible = false;
+      modelRoot.setEnabled(false);
+      
+      // Babylon has a built-in function to perfectly center geometry and remove offsets
+      modelRoot.normalizeToUnitCube();
+      
+      // Scale to realistic real-world size (approx 35cm)
+      modelRoot.scaling = new Vector3(0.35, 0.35, 0.35);
+      
+      // normalizeToUnitCube centers the model at Y=0. 
+      // To make the bottom of the plate touch the floor, we shift it up by half its scaled height.
+      modelRoot.position.y = 0.5 * 0.35;
+      
+      console.log("✅ Babylon GLB Loaded");
+    }).catch(console.error);
 
-      try {
-        // 1. Create or reuse the independent anchor root.
-        if (!placedModel) {
-          placedModel = new THREE.Group();
-          scene.add(placedModel);
-          // Add the single original model instance to save memory. NEVER clone!
-          const s = model.userData.s ?? 1;
-          model.scale.set(s, s, s);
-          placedModel.add(model);
+    // ── Setup WebXR Default Experience ───────────────────────────────
+    scene.createDefaultXRExperienceAsync({
+      uiOptions: {
+        sessionMode: "immersive-ar",
+        referenceSpaceType: "local-floor"
+      },
+      optionalFeatures: true,
+      disableDefaultUI: true // We use our own React UI to launch AR
+    }).then((xr) => {
+      xrHelperRef.current = xr;
+      const featuresManager = xr.baseExperience.featuresManager;
+
+      // 1. Enable DOM Overlay for custom UI
+      featuresManager.enableFeature(WebXRFeatureName.DOM_OVERLAY, "latest", {
+        element: overlayRef.current
+      });
+
+      // 2. Enable Hit Testing (Invisible reticle internally handled)
+      const hitTest = featuresManager.enableFeature(WebXRFeatureName.HIT_TEST, "latest", {
+        enableBackgroundHitTest: true
+      });
+
+      // 3. Enable Native Anchors (Crucial for 0 drift)
+      const anchorSystem = featuresManager.enableFeature(WebXRFeatureName.ANCHOR_SYSTEM, "latest");
+
+      xr.baseExperience.onStateChangedObservable.add((state) => {
+        setInSession(state === WebXRState.IN_XR);
+      });
+
+      // Track the latest hit test silently
+      hitTest.onHitTestResultObservable.add((results) => {
+        if (results.length > 0) {
+          lastHitTest = results[0];
         } else {
-          // It's already in the scene, just make sure it's attached
-          if (placedModel.parent !== scene) scene.add(placedModel);
+          lastHitTest = null;
         }
+      });
 
-        // Remove previous anchor
-        if (placedAnchor) { placedAnchor.delete(); placedAnchor = null; }
+      // ── Placement Logic (Tap) ──────────────────────────────────────
+      scene.onPointerObservable.add(async (pointerInfo) => {
+        if (pointerInfo.type === PointerEventTypes.POINTERDOWN) {
+          if (xr.baseExperience.state !== WebXRState.IN_XR) return;
+          if (!modelRoot || isPlacing || !lastHitTest) return;
 
-        const xrCam = renderer.xr.getCamera();
-
-        if (reticle.visible && lastHitResult) {
+          isPlacing = true;
           try {
-            placedAnchor = await lastHitResult.createAnchor();
-            console.log("⚓ Anchor created — model is physically locked");
+            // Remove previous anchor
+            if (placedAnchor) {
+              placedAnchor.remove();
+              placedAnchor = null;
+            }
+
+            // Create new anchor directly from the hardware hit test
+            const anchor = await anchorSystem.addAnchorPointUsingHitTestResultAsync(lastHitTest);
+            if (anchor) {
+              placedAnchor = anchor;
+              
+              if (!anchorRoot) {
+                anchorRoot = new TransformNode("anchorRoot", scene);
+                modelRoot.parent = anchorRoot;
+                modelRoot.setEnabled(true);
+              }
+              
+              // Babylon's native anchor system automatically updates attachedNode every frame!
+              anchor.attachedNode = anchorRoot;
+              
+              // Rotate the inner model to face the camera like a lazy-susan (Y-axis)
+              const camPos = xr.baseExperience.camera.position;
+              const anchorMatrix = anchorRoot.getWorldMatrix().clone().invert();
+              const camPosLocal = Vector3.TransformCoordinates(camPos, anchorMatrix);
+              
+              // Babylon is left-handed, atan2(x, z) rotates around Y correctly
+              const angle = Math.atan2(camPosLocal.x, camPosLocal.z);
+              if (!modelRoot.rotationQuaternion) {
+                 modelRoot.rotationQuaternion = Quaternion.Identity();
+              }
+              modelRoot.rotationQuaternion = Quaternion.RotationAxis(Vector3.Up(), angle);
+
+              console.log("⚓ Babylon Anchor Created and Locked");
+            }
           } catch (e) {
-            console.warn("⚠️ Anchors not supported", e);
-          }
-          
-          placedModel.position.setFromMatrixPosition(reticle.matrix);
-          placedModel.quaternion.setFromRotationMatrix(reticle.matrix);
-        } else {
-          // Fallback: 1.2 m in front of the XR camera
-          placedModel.position.setFromMatrixPosition(xrCam.matrixWorld);
-          
-          const camDir = new THREE.Vector3(0, 0, -1);
-          camDir.transformDirection(xrCam.matrixWorld);
-          placedModel.position.addScaledVector(camDir, 1.2);
-          
-          placedModel.quaternion.setFromRotationMatrix(xrCam.matrixWorld);
-          console.warn("⚠️ No surface — placed 1.2m in front of camera");
-        }
-
-        // 2. Make the dish "face" the camera like a lazy-susan (Y-axis).
-        placedModel.updateMatrixWorld(true);
-        const camPosLocal = placedModel.worldToLocal(new THREE.Vector3().setFromMatrixPosition(xrCam.matrixWorld));
-        camPosLocal.y = 0; // Keep perfectly flat on the physical floor
-        model.lookAt(camPosLocal);
-
-      } finally {
-        isPlacing = false;
-      }
-    });
-    scene.add(controller);
-
-    // ── AR Button ────────────────────────────────────────────────
-    const btn = ARButton.createButton(renderer, {
-      requiredFeatures: ["hit-test", "anchors"],
-      optionalFeatures: ["dom-overlay"],
-      domOverlay: { root: overlay },
-    });
-    document.body.appendChild(btn);
-
-    // ── Session lifecycle ─────────────────────────────────────────
-    renderer.xr.addEventListener("sessionstart", () => setInSession(true));
-    renderer.xr.addEventListener("sessionend", () => {
-      hitTestSource = null;
-      hitTestSourceRequested = false;
-      reticle.visible = false;
-      lastHitResult = null;
-      if (placedAnchor) { placedAnchor.delete(); placedAnchor = null; }
-      setInSession(false);
-    });
-
-    // ── Hit-test state ────────────────────────────────────────────
-    let hitTestSource = null;
-    let hitTestSourceRequested = false;
-
-    // ── Animation loop ────────────────────────────────────────────
-    renderer.setAnimationLoop((timestamp, frame) => {
-      if (frame) {
-        const refSpace = renderer.xr.getReferenceSpace();
-        const session = renderer.xr.getSession();
-
-        // Request hit-test source once per session (Three.js official pattern)
-        if (!hitTestSourceRequested) {
-          session.requestReferenceSpace("viewer").then((vs) =>
-            session.requestHitTestSource({ space: vs }).then((src) => {
-              hitTestSource = src;
-            })
-          );
-          session.addEventListener("end", () => {
-            hitTestSourceRequested = false;
-            hitTestSource = null;
-          });
-          hitTestSourceRequested = true;
-        }
-
-        // Update reticle — shows where the model will land
-        if (hitTestSource) {
-          const results = frame.getHitTestResults(hitTestSource);
-          if (results.length > 0) {
-            const pose = results[0].getPose(refSpace);
-            reticle.visible = true;
-            reticle.matrix.fromArray(pose.transform.matrix);
-            lastHitResult = results[0];
-          } else {
-            reticle.visible = false;
-            lastHitResult = null;
+            console.error("⚠️ Anchor placement failed", e);
+          } finally {
+            isPlacing = false;
           }
         }
-        
-        // ── Direct Anchor Tracking ─────────────────────────────────
-        // Lock the model perfectly to the anchor without lerping.
-        // This stops it from "running away" as ARCore tracks the room.
-        if (placedAnchor && placedModel && frame.trackedAnchors?.has(placedAnchor)) {
-          const pose = frame.getPose(placedAnchor.anchorSpace, refSpace);
-          if (pose) {
-            placedModel.matrix.fromArray(pose.transform.matrix);
-            placedModel.matrix.decompose(placedModel.position, placedModel.quaternion, placedModel.scale);
-          }
-        }
-      }
-      renderer.render(scene, camera);
+      });
     });
 
-    // ── Resize ───────────────────────────────────────────────────
-    const onResize = () => {
-      camera.aspect = window.innerWidth / window.innerHeight;
-      camera.updateProjectionMatrix();
-      renderer.setSize(window.innerWidth, window.innerHeight);
-    };
+    engine.runRenderLoop(() => {
+      scene.render();
+    });
+
+    const onResize = () => engine.resize();
     window.addEventListener("resize", onResize);
 
-    // ── Reset ────────────────────────────────────────────────────
+    // Provide reset functionality to the React UI
     window.resetAR = () => {
-      if (placedModel) scene.remove(placedModel);
-      if (placedAnchor) { placedAnchor.delete(); placedAnchor = null; }
-      lastHitResult = null;
-      reticle.visible = false;
+      if (placedAnchor) {
+        placedAnchor.remove();
+        placedAnchor = null;
+      }
+      if (modelRoot) {
+        modelRoot.setEnabled(false);
+      }
+      lastHitTest = null;
     };
 
     return () => {
-      renderer.setAnimationLoop(null);
       window.removeEventListener("resize", onResize);
-      renderer.xr.getSession()?.end().catch(() => {});
-      renderer.dispose();
-      btn.remove();
+      engine.dispose();
     };
   }, []);
 
   return (
     <>
-      {/* Three.js canvas mount */}
-      <div ref={mountRef} style={{ position: "fixed", inset: 0 }} />
+      <canvas
+        ref={canvasRef}
+        style={{
+          width: "100%",
+          height: "100%",
+          display: "block",
+          position: "fixed",
+          inset: 0,
+          outline: "none"
+        }}
+      />
 
-      {/* dom-overlay root — the ONLY DOM content visible during XR session */}
+      {/* dom-overlay root */}
       <div
         ref={overlayRef}
         style={{ position: "fixed", inset: 0, pointerEvents: "none", zIndex: 10 }}
@@ -276,7 +204,7 @@ export default function ARScene() {
               position: "absolute", top: 20, left: "50%", transform: "translateX(-50%)",
               background: "rgba(0,0,0,0.5)", color: "#fff", padding: "6px 18px",
               borderRadius: 20, fontSize: 13, fontWeight: 500, whiteSpace: "nowrap",
-              backdropFilter: "blur(6px)",
+              backdropFilter: "blur(6px)"
             }}>
               Point at a surface · Tap to place
             </div>
@@ -296,28 +224,33 @@ export default function ARScene() {
         )}
       </div>
 
-      {/* Landing screen — NOT inside dom-overlay, hidden during session via inSession */}
+      {/* Landing screen */}
       {!inSession && (
         <div style={{
-          position: "fixed", inset: 0, zIndex: 50,
-          background: "radial-gradient(ellipse at 60% 40%, #0d1f2d 0%, #060d12 100%)",
+          position: "fixed", inset: 0, background: "#111",
           display: "flex", flexDirection: "column",
-          alignItems: "center", justifyContent: "center",
-          gap: 20, fontFamily: "system-ui, sans-serif",
-          pointerEvents: "none",
+          alignItems: "center", justifyContent: "center", zIndex: 20
         }}>
-          <div style={{
-            width: 120, height: 120, borderRadius: "50%",
-            border: "2px solid rgba(0,255,200,0.4)",
-            display: "flex", alignItems: "center", justifyContent: "center",
-            boxShadow: "0 0 60px rgba(0,255,200,0.12)",
-          }}>
-            <div style={{ width: 75, height: 75, borderRadius: "50%", border: "2px solid rgba(0,255,200,0.2)" }} />
-          </div>
-          <h1 style={{ color: "#fff", fontSize: 24, fontWeight: 700, margin: 0 }}>WebAR</h1>
-          <p style={{ color: "rgba(255,255,255,0.45)", fontSize: 14, margin: 0 }}>
-            Tap START AR · Chrome Android · ARCore required
+          <h1 style={{ color: "#fff", fontSize: 24, marginBottom: 12 }}>Aroma WebXR</h1>
+          <p style={{ color: "#aaa", fontSize: 14, marginBottom: 24, textAlign: "center", maxWidth: 300 }}>
+            Powered by Babylon.js Native AR Anchors
           </p>
+          <button
+            onClick={() => {
+              if (xrHelperRef.current) {
+                xrHelperRef.current.baseExperience.enterXRAsync("immersive-ar", "local-floor").catch(console.error);
+              } else {
+                alert("AR engine is still loading. Please wait a second.");
+              }
+            }}
+            style={{
+              padding: "14px 24px", background: "#fff", color: "#000",
+              border: "none", borderRadius: 12, fontSize: 16,
+              fontWeight: 700, cursor: "pointer", boxShadow: "0 4px 12px rgba(255,255,255,0.2)"
+            }}
+          >
+            Launch AR Experience
+          </button>
         </div>
       )}
     </>

@@ -1,0 +1,1 @@
+var t=class t{get underlyingResource(){return null}constructor(){this.references=0,this.capacity=0,this.is32Bits=!1,this.uniqueId=t._Counter++}};t._Counter=0;export{t};

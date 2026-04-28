@@ -1,0 +1,1 @@
+import{t as r}from"./shaderStore-CRPMbCP9.js";var o="oitFinalSimpleBlendPixelShader",e="precision highp float;uniform sampler2D uFrontColor;void main() {ivec2 fragCoord=ivec2(gl_FragCoord.xy);vec4 frontColor=texelFetch(uFrontColor,fragCoord,0);glFragColor=frontColor;}\n";r.ShadersStore[o]||(r.ShadersStore[o]=e);var a={name:o,shader:e};export{a as oitFinalSimpleBlendPixelShader};
