@@ -69,8 +69,10 @@ export default function ARScene() {
     // ── 7. MODEL LOADING ──────────────────────────────────────────
     let preloadedModel = null;
     const loader = new GLTFLoader();
+    // Load GLB from GitHub via jsDelivr CDN — works on any domain, no Vercel upload needed
+    const MODEL_URL = "https://cdn.jsdelivr.net/gh/BishnuMukherjee123/WebXR@main/public/models/10.glb";
     loader.load(
-      "/models/10.glb",
+      MODEL_URL,
       (gltf) => {
         preloadedModel = gltf.scene;
         preloadedModel.traverse((child) => {
