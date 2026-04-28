@@ -2,6 +2,7 @@ import { useEffect, useRef } from "react";
 import * as THREE from "three";
 import { clone as skeletonClone } from "three/addons/utils/SkeletonUtils.js";
 import { GLTFLoader } from "three/addons/loaders/GLTFLoader.js";
+import { DRACOLoader } from "three/addons/loaders/DRACOLoader.js";
 
 // ── On-screen debug log so we can see errors on mobile ─────────────────────
 function createDebugLog() {
@@ -116,11 +117,19 @@ export default function ARScene() {
 
     // ── 7. MODEL LOADING ──────────────────────────────────────────
     let preloadedModel = null;
-    const loader = new GLTFLoader();
 
-    // Use the local public URL — works on both dev (localhost) and Vercel
-    const MODEL_URL = "/models/10.glb";
-    log(`📦 Loading GLB from: ${MODEL_URL}`);
+    // DRACOLoader is required — the GLB uses Draco compression
+    const dracoLoader = new DRACOLoader();
+    // Use Google's hosted Draco decoder (works on any domain, no local files needed)
+    dracoLoader.setDecoderPath("https://www.gstatic.com/draco/versioned/decoders/1.5.6/");
+    dracoLoader.preload();
+
+    const loader = new GLTFLoader();
+    loader.setDRACOLoader(dracoLoader);
+
+    // Supabase public storage URL — reliable CDN, no GitHub/jsDelivr delays
+    const MODEL_URL = "https://iskchovltfnohyftjckg.supabase.co/storage/v1/object/public/models/10.glb";
+    log(`📦 Loading GLB from Supabase...`);
 
     loader.load(
       MODEL_URL,
