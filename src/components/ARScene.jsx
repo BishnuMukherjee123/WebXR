@@ -18,14 +18,15 @@ export default function ARScene() {
     let reticle;
     let controller;
     let placedObjects = [];
+    let preloadedModel = null; // ✅ cached — loaded once, cloned on each tap
 
     const init = async () => {
       console.log("🔍 ARScene init starting...");
-      
-      // 🧠 Check support
+
+      // 🧠 Check WebXR support
       if (!navigator.xr) {
         console.error("❌ navigator.xr not available");
-        alert("WebXR not supported");
+        alert("WebXR not supported on this browser");
         return;
       }
 
@@ -34,7 +35,7 @@ export default function ARScene() {
       try {
         const supported = await navigator.xr.isSessionSupported("immersive-ar");
         console.log("AR support check:", supported);
-        
+
         if (!supported) {
           alert("AR not supported on this device");
           return;
@@ -43,7 +44,7 @@ export default function ARScene() {
         console.error("❌ Error checking AR support:", err);
       }
 
-      // 🎬 Scene setup
+      // 🎬 Scene + camera
       scene = createScene();
 
       camera = new THREE.PerspectiveCamera(
@@ -59,50 +60,55 @@ export default function ARScene() {
       reticle = createReticle();
       scene.add(reticle);
 
-      // 🎮 Controller (tap)
+      // 📦 Preload GLB once — tap placement is then instant
+      try {
+        console.log("📦 Preloading GLB model...");
+        preloadedModel = await loadGLB("/models/10.glb");
+        console.log("✅ GLB preloaded");
+      } catch (err) {
+        console.error("❌ GLB preload failed:", err);
+      }
+
+      // 🎮 Controller (handles tap / select)
       controller = renderer.xr.getController(0);
 
-      controller.addEventListener("select", async () => {
+      controller.addEventListener("select", () => {
         if (!reticle.visible) return;
 
-        try {
-          const model = await loadGLB("/models/10.glb");
-
-          // Position
-          model.position.setFromMatrixPosition(reticle.matrix);
-
-          // Rotation
-          model.quaternion.setFromRotationMatrix(reticle.matrix);
-
-          // Scale
-          model.scale.set(0.3, 0.3, 0.3);
-
-          scene.add(model);
-          placedObjects.push(model);
-        } catch (err) {
-          console.error("❌ GLB load failed:", err);
+        if (!preloadedModel) {
+          console.warn("⚠️ Model not yet loaded, try again");
+          return;
         }
+
+        // Clone the preloaded scene so multiple copies can be placed
+        const model = preloadedModel.clone();
+
+        model.position.setFromMatrixPosition(reticle.matrix);
+        model.quaternion.setFromRotationMatrix(reticle.matrix);
+        model.scale.set(0.3, 0.3, 0.3);
+
+        scene.add(model);
+        placedObjects.push(model);
+        console.log("✅ Model placed at", model.position);
       });
 
       scene.add(controller);
 
-      // 🚀 Expose start function globally (for React button)
+      // 🚀 Start AR — triggered by UI button
       window.startAR = async () => {
         if (session) {
-          console.log("⚠️ AR already running");
+          console.log("⚠️ AR session already running");
           return;
         }
 
         try {
-          console.log("🚀 Starting AR session...");
+          console.log("🚀 Requesting AR session...");
           session = await startXRSession(renderer);
           console.log("✅ XR session started", session);
 
-          console.log("🔍 Setting up hit test...");
           hitTestSource = await setupHitTest(session);
-          console.log("✅ hit-test ready", hitTestSource);
-          
-          // Listen for session end
+          console.log("✅ hit-test source ready");
+
           session.addEventListener("end", () => {
             console.log("⛔ XR session ended");
             session = null;
@@ -110,22 +116,17 @@ export default function ARScene() {
           });
         } catch (err) {
           console.error("❌ AR start failed:", err);
-          console.error("Error details:", {
-            name: err.name,
-            message: err.message,
-            stack: err.stack
-          });
           alert("AR Error: " + err.message);
         }
       };
 
-      // 🔄 Reset function
+      // 🔄 Clear all placed objects
       window.resetAR = () => {
         placedObjects.forEach((obj) => scene.remove(obj));
         placedObjects = [];
       };
 
-      // 🔁 Render loop
+      // 🔁 Animation / render loop
       renderer.setAnimationLoop((time, frame) => {
         if (frame && hitTestSource && session) {
           try {
@@ -134,7 +135,6 @@ export default function ARScene() {
 
             if (hits.length > 0) {
               const pose = hits[0].getPose(referenceSpace);
-
               reticle.visible = true;
               reticle.matrix.fromArray(pose.transform.matrix);
             } else {
@@ -143,8 +143,6 @@ export default function ARScene() {
           } catch (err) {
             console.error("❌ Hit test error:", err);
           }
-        } else if (!frame) {
-          // console.log("⏳ Waiting for XR frame...");
         }
 
         renderer.render(scene, camera);
@@ -154,7 +152,10 @@ export default function ARScene() {
     init();
 
     return () => {
-      if (renderer) renderer.dispose();
+      if (renderer) {
+        renderer.setAnimationLoop(null);
+        renderer.dispose();
+      }
     };
   }, []);
 

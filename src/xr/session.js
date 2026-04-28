@@ -8,7 +8,7 @@ export async function startXRSession(renderer) {
   try {
     const session = await navigator.xr.requestSession("immersive-ar", {
       requiredFeatures: ["hit-test"],
-      optionalFeatures: ["dom-overlay"],
+      optionalFeatures: ["dom-overlay", "local-floor", "bounded-floor"],
       domOverlay: { root: document.body },
     });
 
