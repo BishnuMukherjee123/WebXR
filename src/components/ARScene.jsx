@@ -36,10 +36,13 @@ export default function ARScene() {
     const renderer = new THREE.WebGLRenderer({ antialias: true, alpha: true });
     renderer.setPixelRatio(Math.min(window.devicePixelRatio, 2));
     renderer.setSize(window.innerWidth, window.innerHeight);
-    renderer.shadowMap.enabled = true;
+    // CRITICAL for WebXR AR passthrough:
+    // alpha:true alone is NOT enough — must explicitly clear to transparent.
+    // Tone mapping must be NoToneMapping; ACESFilmic shifts the alpha channel
+    // in the XR framebuffer and blacks out the camera passthrough.
+    renderer.setClearColor(0x000000, 0);   // ← transparent clear
     renderer.outputColorSpace = THREE.SRGBColorSpace;
-    renderer.toneMapping = THREE.ACESFilmicToneMapping;
-    renderer.toneMappingExposure = 1.4;
+    renderer.toneMapping = THREE.NoToneMapping; // ← no tone mapping in XR
     renderer.xr.enabled = true;
     mount.appendChild(renderer.domElement);
 
