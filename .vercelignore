@@ -4,3 +4,11 @@ node_modules
 README.md
 .env.local
 .env.*.local
+src
+public
+package.json
+package-lock.json
+vite.config.js
+eslint.config.js
+index.html
+!dist
