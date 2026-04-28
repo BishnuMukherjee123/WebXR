@@ -1,16 +1,17 @@
 import ARScene from './components/ARScene'
 import UIOverlay from './components/UIOverlay'
+import './index.css'
 
+/**
+ * App — ARScene sets up the Three.js WebXR renderer and injects ARButton.
+ * UIOverlay lives in the React tree so it renders into document.body (the
+ * WebXR dom-overlay root), remaining visible during the immersive session.
+ */
 function App() {
   return (
     <>
-      {/* Layer 0: camera video + Layer 1: Three.js canvas — both inside ARScene */}
       <ARScene />
-
-      {/* Layer 2: UI buttons on top */}
-      <div style={{ position: 'fixed', inset: 0, zIndex: 10, pointerEvents: 'none' }}>
-        <UIOverlay />
-      </div>
+      <UIOverlay />
     </>
   )
 }

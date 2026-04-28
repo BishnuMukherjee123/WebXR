@@ -1,172 +1,101 @@
 import { useEffect, useRef } from "react";
 import * as THREE from "three";
-import { clone as skeletonClone } from "three/addons/utils/SkeletonUtils.js";
+import { ARButton } from "three/addons/webxr/ARButton.js";
 import { GLTFLoader } from "three/addons/loaders/GLTFLoader.js";
 import { DRACOLoader } from "three/addons/loaders/DRACOLoader.js";
+import { clone as skeletonClone } from "three/addons/utils/SkeletonUtils.js";
 
-// ── On-screen debug log so we can see errors on mobile ─────────────────────
-function createDebugLog() {
-  const el = document.createElement("div");
-  el.id = "ar-debug-log";
-  Object.assign(el.style, {
-    position: "fixed",
-    top: "0",
-    left: "0",
-    right: "0",
-    background: "rgba(0,0,0,0.65)",
-    color: "#0f0",
-    fontSize: "11px",
-    fontFamily: "monospace",
-    padding: "4px 8px",
-    zIndex: "9999",
-    maxHeight: "30vh",
-    overflowY: "auto",
-    pointerEvents: "none",
-    whiteSpace: "pre-wrap",
-    wordBreak: "break-all",
-  });
-  document.body.appendChild(el);
-  return (msg) => {
-    const line = document.createElement("div");
-    line.textContent = `[${new Date().toLocaleTimeString()}] ${msg}`;
-    el.appendChild(line);
-    el.scrollTop = el.scrollHeight;
-    console.log(msg);
-  };
-}
+// GLB hosted on Supabase public storage (Draco-compressed)
+const MODEL_URL =
+  "https://iskchovltfnohyftjckg.supabase.co/storage/v1/object/public/models/10.glb";
 
 export default function ARScene() {
-  const containerRef = useRef();
-  const videoRef = useRef();
+  const mountRef = useRef(); // div that receives the renderer canvas
 
   useEffect(() => {
-    const container = containerRef.current;
-    const video = videoRef.current;
-    const log = createDebugLog();
+    const mount = mountRef.current;
 
-    // ── 1. CAMERA FEED ────────────────────────────────────────────
-    let stream = null;
-    log("📷 Requesting camera...");
-
-    // Fix React JSX bug: 'muted' prop does NOT set the DOM attribute.
-    // Must be set programmatically or autoplay policy blocks video on mobile.
-    video.muted = true;
-    video.setAttribute("playsinline", "");        // Standard
-    video.setAttribute("webkit-playsinline", ""); // iOS Safari legacy
-
-    navigator.mediaDevices
-      .getUserMedia({
-        video: { facingMode: { ideal: "environment" }, width: { ideal: 1280 }, height: { ideal: 720 } },
-        audio: false,
-      })
-      .then((s) => {
-        stream = s;
-        video.srcObject = s;
-        log("✅ Camera stream assigned");
-
-        const tryPlay = () => {
-          video.muted = true; // ensure still muted before play
-          const p = video.play();
-          if (p !== undefined) {
-            p.then(() => log("▶️ Video playing ✅"))
-             .catch((err) => {
-               log(`⚠️ play() blocked: ${err.message} — retrying in 400ms…`);
-               setTimeout(() => {
-                 video.muted = true;
-                 video.play()
-                   .then(() => log("▶️ Video playing on retry ✅"))
-                   .catch((e) => log(`❌ Retry failed: ${e.message}`));
-               }, 400);
-             });
-          } else {
-            log("▶️ play() called (no promise — old browser)");
-          }
-        };
-
-        if (video.readyState >= 1) {
-          tryPlay();
-        } else {
-          video.addEventListener("loadedmetadata", tryPlay, { once: true });
-        }
-      })
-      .catch((err) => log(`❌ Camera error: ${err.name}: ${err.message}`));
-
-    // ── 2. SCENE ──────────────────────────────────────────────────
-    const scene = new THREE.Scene();
-
-    const ambientLight = new THREE.AmbientLight(0xffffff, 2.5);
-    scene.add(ambientLight);
-    const hemiLight = new THREE.HemisphereLight(0xffffff, 0xbbbbff, 2);
-    hemiLight.position.set(0.5, 1, 0.25);
-    scene.add(hemiLight);
-    const dirLight = new THREE.DirectionalLight(0xffffff, 3);
-    dirLight.position.set(2, 4, 3);
-    scene.add(dirLight);
-
-    // ── 3. THREE.JS CAMERA ────────────────────────────────────────
-    const camera = new THREE.PerspectiveCamera(
-      60, window.innerWidth / window.innerHeight, 0.01, 100
-    );
-    camera.position.set(0, 0, 0);
-
-    // ── 4. RENDERER — transparent canvas on top of video ──────────
+    // ── 1. RENDERER ─────────────────────────────────────────────────
     const renderer = new THREE.WebGLRenderer({ antialias: true, alpha: true });
     renderer.setPixelRatio(Math.min(window.devicePixelRatio, 2));
     renderer.setSize(window.innerWidth, window.innerHeight);
-    renderer.setClearColor(0x000000, 0);
+    renderer.shadowMap.enabled = true;
+    renderer.shadowMap.type = THREE.PCFSoftShadowMap;
     renderer.outputColorSpace = THREE.SRGBColorSpace;
     renderer.toneMapping = THREE.ACESFilmicToneMapping;
-    renderer.toneMappingExposure = 1.5;
-    container.appendChild(renderer.domElement);
-    log("✅ Renderer created");
+    renderer.toneMappingExposure = 1.4;
+    // ← The key line that enables WebXR
+    renderer.xr.enabled = true;
+    mount.appendChild(renderer.domElement);
 
-    // ── 5. RETICLE ────────────────────────────────────────────────
-    const reticle = new THREE.Mesh(
-      new THREE.RingGeometry(0.06, 0.1, 32).rotateX(-Math.PI / 2),
-      new THREE.MeshBasicMaterial({
-        color: 0x00ffcc,
-        side: THREE.DoubleSide,
-        transparent: true,
-        opacity: 0.85,
-      })
+    // ── 2. SCENE ────────────────────────────────────────────────────
+    const scene = new THREE.Scene();
+
+    // Hemisphere (sky/ground ambient)
+    const hemi = new THREE.HemisphereLight(0xffffff, 0x444444, 1.5);
+    hemi.position.set(0, 20, 0);
+    scene.add(hemi);
+
+    // Directional (sun with shadows)
+    const dirLight = new THREE.DirectionalLight(0xffffff, 2.5);
+    dirLight.position.set(5, 10, 5);
+    dirLight.castShadow = true;
+    dirLight.shadow.mapSize.set(1024, 1024);
+    dirLight.shadow.camera.near = 0.1;
+    dirLight.shadow.camera.far = 20;
+    scene.add(dirLight);
+
+    // Ambient fill — so GLB is always lit from all sides
+    scene.add(new THREE.AmbientLight(0xffffff, 0.8));
+
+    // ── 3. CAMERA ───────────────────────────────────────────────────
+    // Three.js XR manages the camera automatically when in session.
+    // We still need a PerspectiveCamera for the non-XR render fallback.
+    const camera = new THREE.PerspectiveCamera(
+      70,
+      window.innerWidth / window.innerHeight,
+      0.01,
+      20
     );
+
+    // ── 4. RETICLE (surface indicator ring) ─────────────────────────
+    const reticle = new THREE.Mesh(
+      new THREE.RingGeometry(0.10, 0.15, 32).rotateX(-Math.PI / 2),
+      new THREE.MeshBasicMaterial({ color: 0x00ffcc, side: THREE.DoubleSide })
+    );
+    reticle.matrixAutoUpdate = false; // we set its matrix directly from hit-test
+    reticle.visible = false;
     scene.add(reticle);
 
-    // ── 6. RAYCASTER ──────────────────────────────────────────────
-    const raycaster = new THREE.Raycaster();
+    // ── 5. GLB LOADER ───────────────────────────────────────────────
+    let preloadedGltf = null; // raw gltf.scene, cloned on each placement
 
-    // ── 7. MODEL LOADING ──────────────────────────────────────────
-    let preloadedModel = null;
-
-    // DRACOLoader is required — the GLB uses Draco compression
     const dracoLoader = new DRACOLoader();
-    // Use Google's hosted Draco decoder (works on any domain, no local files needed)
-    dracoLoader.setDecoderPath("https://www.gstatic.com/draco/versioned/decoders/1.5.6/");
+    dracoLoader.setDecoderPath(
+      "https://www.gstatic.com/draco/versioned/decoders/1.5.6/"
+    );
     dracoLoader.preload();
 
-    const loader = new GLTFLoader();
-    loader.setDRACOLoader(dracoLoader);
+    const gltfLoader = new GLTFLoader();
+    gltfLoader.setDRACOLoader(dracoLoader);
 
-    // Supabase public storage URL — reliable CDN, no GitHub/jsDelivr delays
-    const MODEL_URL = "https://iskchovltfnohyftjckg.supabase.co/storage/v1/object/public/models/10.glb";
-    log(`📦 Loading GLB from Supabase...`);
-
-    loader.load(
+    gltfLoader.load(
       MODEL_URL,
       (gltf) => {
-        preloadedModel = gltf.scene;
+        preloadedGltf = gltf.scene;
 
-        // Compute bounding box to auto-scale the model sensibly
-        const box = new THREE.Box3().setFromObject(preloadedModel);
+        // Auto-scale: normalise longest axis to 0.25 m
+        const box = new THREE.Box3().setFromObject(preloadedGltf);
         const size = new THREE.Vector3();
         box.getSize(size);
         const maxDim = Math.max(size.x, size.y, size.z);
-        // Normalise to ~0.25m then scale up to 0.3m target size
-        const normalise = maxDim > 0 ? 0.3 / maxDim : 1;
-        preloadedModel.userData.autoScale = normalise;
+        const s = maxDim > 0 ? 0.25 / maxDim : 1;
+        preloadedGltf.userData.normalizedScale = s;
 
-        preloadedModel.traverse((child) => {
+        preloadedGltf.traverse((child) => {
           if (child.isMesh) {
+            child.castShadow = true;
+            child.receiveShadow = true;
             child.frustumCulled = false;
             if (child.material) {
               child.material.needsUpdate = true;
@@ -174,116 +103,130 @@ export default function ARScene() {
             }
           }
         });
-        log(`✅ GLB loaded! Size: ${size.x.toFixed(2)} x ${size.y.toFixed(2)} x ${size.z.toFixed(2)} → scale ${normalise.toFixed(3)}`);
+
+        console.log(`✅ GLB ready — normalized scale: ${s.toFixed(4)}`);
       },
       (xhr) => {
         if (xhr.total > 0)
-          log(`📦 GLB: ${Math.round((xhr.loaded / xhr.total) * 100)}%`);
+          console.log(`📦 GLB ${Math.round((xhr.loaded / xhr.total) * 100)}%`);
       },
-      (err) => log(`❌ GLB load error: ${err.message || err}`)
+      (err) => console.error("❌ GLB load error:", err)
     );
 
-    // ── 8. DEVICE ORIENTATION ─────────────────────────────────────
-    const deviceQuat = new THREE.Quaternion();
-    const deviceEuler = new THREE.Euler();
-    let hasOrientation = false;
+    // ── 6. AR BUTTON ────────────────────────────────────────────────
+    // ARButton handles feature detection, HTTPS check, and session entry.
+    const arButton = ARButton.createButton(renderer, {
+      requiredFeatures: ["hit-test"],
+      optionalFeatures: ["dom-overlay", "light-estimation"],
+      domOverlay: { root: document.body },
+    });
+    document.body.appendChild(arButton);
 
-    function onOrientation(e) {
-      if (e.alpha === null) return;
-      hasOrientation = true;
-      deviceEuler.set(
-        THREE.MathUtils.degToRad(e.beta  - 90),
-        THREE.MathUtils.degToRad(-e.alpha),
-        THREE.MathUtils.degToRad(-e.gamma),
-        "YXZ"
-      );
-      deviceQuat.setFromEuler(deviceEuler);
-    }
+    // ── 7. HIT-TEST STATE ───────────────────────────────────────────
+    // Allocate reusable objects OUTSIDE the render loop (rule: no GC pressure)
+    let hitTestSource = null;
+    let hitTestSourceRequested = false;
+    let modelPlaced = false;
+    const tempMatrix = new THREE.Matrix4(); // reused every frame
 
-    if (window.DeviceOrientationEvent) {
-      if (typeof DeviceOrientationEvent.requestPermission === "function") {
-        DeviceOrientationEvent.requestPermission()
-          .then((p) => { if (p === "granted") window.addEventListener("deviceorientation", onOrientation); })
-          .catch(console.warn);
-      } else {
-        window.addEventListener("deviceorientation", onOrientation);
-      }
-    }
+    // ── 8. SESSION LIFECYCLE ────────────────────────────────────────
+    renderer.xr.addEventListener("sessionstart", async () => {
+      const session = renderer.xr.getSession();
 
-    // ── 9. PLACEMENT ──────────────────────────────────────────────
-    function getPlacementPosition(clientX, clientY) {
-      const x = (clientX / window.innerWidth)  *  2 - 1;
-      const y = (clientY / window.innerHeight) * -2 + 1;
-      raycaster.setFromCamera({ x, y }, camera);
-      const pos = new THREE.Vector3();
-      raycaster.ray.at(1.2, pos);
-      return pos;
-    }
+      // Request reference spaces for hit-testing
+      const viewerSpace = await session.requestReferenceSpace("viewer");
+      hitTestSource = await session.requestHitTestSource({
+        space: viewerSpace,
+      });
+      hitTestSourceRequested = true;
+      modelPlaced = false;
 
-    function placeModel(clientX, clientY) {
-      if (!preloadedModel) {
-        log("⚠️ GLB not loaded yet — tap again in a moment");
-        return;
-      }
-
-      const pos = getPlacementPosition(clientX, clientY);
-      const model = skeletonClone(preloadedModel);
-      model.position.copy(pos);
-
-      const s = preloadedModel.userData.autoScale ?? 0.3;
-      model.scale.set(s, s, s);
-
-      model.lookAt(new THREE.Vector3(
-        camera.position.x,
-        model.position.y,
-        camera.position.z
-      ));
-
-      model.traverse((child) => {
-        if (child.isMesh) {
-          child.visible = true;
-          child.frustumCulled = false;
-          if (child.material) child.material.needsUpdate = true;
+      // ── 9. TAP-TO-PLACE ───────────────────────────────────────────
+      session.addEventListener("select", () => {
+        if (!preloadedGltf) {
+          console.warn("⚠️ Model not loaded yet");
+          return;
         }
+        if (!reticle.visible) return;
+
+        const model = skeletonClone(preloadedGltf);
+        const s = preloadedGltf.userData.normalizedScale ?? 1;
+        model.scale.set(s, s, s);
+
+        // Place exactly at hit-test surface position + orientation
+        model.position.setFromMatrixPosition(reticle.matrix);
+        model.quaternion.setFromRotationMatrix(reticle.matrix);
+
+        model.traverse((child) => {
+          if (child.isMesh) {
+            child.castShadow = true;
+            child.receiveShadow = true;
+            child.frustumCulled = false;
+          }
+        });
+
+        scene.add(model);
+        modelPlaced = true;
+        console.log("✅ Model placed in world space");
       });
 
-      scene.add(model);
-      log(`✅ Model placed at (${pos.x.toFixed(2)}, ${pos.y.toFixed(2)}, ${pos.z.toFixed(2)})`);
-    }
+      session.addEventListener("end", () => {
+        hitTestSource = null;
+        hitTestSourceRequested = false;
+        modelPlaced = false;
+        reticle.visible = false;
+        console.log("🔚 XR session ended");
+      });
 
-    function onTouchEnd(e) {
-      e.preventDefault();
-      const t = e.changedTouches[0];
-      placeModel(t.clientX, t.clientY);
-    }
-    function onClick(e) { placeModel(e.clientX, e.clientY); }
+      console.log("🚀 XR session started");
+    });
 
-    renderer.domElement.addEventListener("touchend", onTouchEnd, { passive: false });
-    renderer.domElement.addEventListener("click", onClick);
+    // ── 10. XR RENDER LOOP ──────────────────────────────────────────
+    // renderer.setAnimationLoop replaces window.requestAnimationFrame.
+    // The callback receives (timestamp, XRFrame) — frame is non-null in XR.
+    renderer.setAnimationLoop((timestamp, frame) => {
+      if (frame) {
+        const referenceSpace = renderer.xr.getReferenceSpace();
+        const session = renderer.xr.getSession();
 
-    // ── 10. ANIMATE ───────────────────────────────────────────────
-    const smoothQuat = new THREE.Quaternion();
-    let animId;
+        // Request hit-test source on first frame (must happen after session start)
+        if (!hitTestSourceRequested && session) {
+          session
+            .requestReferenceSpace("viewer")
+            .then((viewerSpace) =>
+              session.requestHitTestSource({ space: viewerSpace })
+            )
+            .then((src) => {
+              hitTestSource = src;
+            })
+            .catch(console.error);
+          hitTestSourceRequested = true;
+        }
 
-    function animate() {
-      animId = requestAnimationFrame(animate);
+        // Run hit-test every frame
+        if (hitTestSource) {
+          const hitTestResults = frame.getHitTestResults(hitTestSource);
 
-      if (hasOrientation) {
-        smoothQuat.slerp(deviceQuat, 0.08);
-        camera.quaternion.copy(smoothQuat);
+          if (hitTestResults.length > 0) {
+            const hit = hitTestResults[0];
+            const pose = hit.getPose(referenceSpace);
+
+            if (pose) {
+              reticle.visible = true;
+              // Copy the hit pose matrix directly into the reticle
+              tempMatrix.fromArray(pose.transform.matrix);
+              reticle.matrix.copy(tempMatrix);
+            }
+          } else {
+            reticle.visible = false;
+          }
+        }
       }
 
-      raycaster.setFromCamera({ x: 0, y: 0 }, camera);
-      const reticlePos = new THREE.Vector3();
-      raycaster.ray.at(1.2, reticlePos);
-      reticle.position.copy(reticlePos);
-      reticle.lookAt(camera.position);
-
       renderer.render(scene, camera);
-    }
-    animate();
+    });
 
-    // ── 11. RESIZE ────────────────────────────────────────────────
+    // ── 11. RESIZE ──────────────────────────────────────────────────
     function onResize() {
       camera.aspect = window.innerWidth / window.innerHeight;
       camera.updateProjectionMatrix();
@@ -291,49 +234,37 @@ export default function ARScene() {
     }
     window.addEventListener("resize", onResize);
 
-    // ── 12. RESET ─────────────────────────────────────────────────
+    // ── 12. RESET helper ────────────────────────────────────────────
     window.resetAR = () => {
-      const keep = new Set([reticle, ambientLight, hemiLight, dirLight]);
+      const keep = new Set([hemi, dirLight, reticle]);
       [...scene.children]
         .filter((o) => !keep.has(o))
         .forEach((o) => scene.remove(o));
-      log("🔄 Scene reset");
+      // Re-add ambient which was not in the keep set (it has no reference)
+      scene.add(new THREE.AmbientLight(0xffffff, 0.8));
+      modelPlaced = false;
+      reticle.visible = false;
+      console.log("🔄 Scene reset");
     };
 
-    // ── CLEANUP ───────────────────────────────────────────────────
+    // ── CLEANUP ─────────────────────────────────────────────────────
     return () => {
-      cancelAnimationFrame(animId);
+      renderer.setAnimationLoop(null);
       window.removeEventListener("resize", onResize);
-      window.removeEventListener("deviceorientation", onOrientation);
-      renderer.domElement.removeEventListener("touchend", onTouchEnd);
-      renderer.domElement.removeEventListener("click", onClick);
+
+      // End XR session if active
+      const session = renderer.xr.getSession();
+      if (session) session.end().catch(() => {});
+
       renderer.dispose();
-      if (stream) stream.getTracks().forEach((t) => t.stop());
-      document.getElementById("ar-debug-log")?.remove();
+      arButton.remove();
     };
   }, []);
 
   return (
-    <>
-      {/* NOTE: autoPlay alone is not enough on mobile.
-           video.muted = true is set via ref in useEffect to work around
-           a React JSX bug where the muted prop does not set the DOM attribute. */}
-      <video
-        ref={videoRef}
-        autoPlay
-        playsInline
-        muted
-        style={{
-          position: "fixed", inset: 0,
-          width: "100%", height: "100%",
-          objectFit: "cover", zIndex: 0,
-          display: "block",
-        }}
-      />
-      <div
-        ref={containerRef}
-        style={{ position: "fixed", inset: 0, zIndex: 1 }}
-      />
-    </>
+    <div
+      ref={mountRef}
+      style={{ position: "fixed", inset: 0, overflow: "hidden" }}
+    />
   );
 }

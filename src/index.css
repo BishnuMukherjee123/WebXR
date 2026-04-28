@@ -1,46 +1,78 @@
 *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
 
-html, body {
+html, body, #root {
   width: 100%;
   height: 100%;
   overflow: hidden;
   background: #000;
+  font-family: system-ui, -apple-system, sans-serif;
 }
 
-#root {
-  width: 100%;
-  height: 100%;
-  position: relative;
+/* ── WebXR AR Button (injected by Three.js ARButton into document.body) ──── */
+/* Three.js ARButton creates a <button> directly on body. We style it here. */
+body > button {
+  position: fixed !important;
+  bottom: 32px !important;
+  left: 50% !important;
+  transform: translateX(-50%) !important;
+  width: auto !important;
+  min-width: 200px !important;
+  padding: 14px 32px !important;
+  border-radius: 100px !important;
+  background: rgba(255, 255, 255, 0.12) !important;
+  border: 1.5px solid rgba(255, 255, 255, 0.5) !important;
+  color: #fff !important;
+  font-size: 16px !important;
+  font-weight: 600 !important;
+  letter-spacing: 0.5px !important;
+  cursor: pointer !important;
+  backdrop-filter: blur(12px) !important;
+  -webkit-backdrop-filter: blur(12px) !important;
+  box-shadow: 0 4px 24px rgba(0, 255, 200, 0.18), 0 0 0 1px rgba(0,255,200,0.08) !important;
+  transition: background 0.2s, box-shadow 0.2s !important;
+  z-index: 100 !important;
 }
 
-/* Hint text — top center */
-.overlay-text {
+body > button:hover {
+  background: rgba(0, 255, 200, 0.18) !important;
+  box-shadow: 0 4px 32px rgba(0, 255, 200, 0.32) !important;
+}
+
+body > button:active {
+  background: rgba(0, 255, 200, 0.28) !important;
+}
+
+/* ── Landing / not-supported state ─────────────────────────────────────── */
+/* When AR is not supported, ARButton shows a disabled "AR Not Supported" button */
+body > button:disabled {
+  opacity: 0.5 !important;
+  cursor: not-allowed !important;
+  box-shadow: none !important;
+}
+
+/* ── Hint text pill (injected by dom-overlay, shown during session) ─────── */
+.ar-hint {
   position: fixed;
-  top: 16px;
+  top: 20px;
   left: 50%;
   transform: translateX(-50%);
-  color: white;
-  z-index: 10;
-  font-size: 14px;
-  font-weight: 500;
-  white-space: nowrap;
-  pointer-events: none;
   background: rgba(0, 0, 0, 0.55);
-  padding: 6px 16px;
+  color: #fff;
+  font-size: 13px;
+  font-weight: 500;
+  padding: 6px 18px;
   border-radius: 20px;
-  font-family: system-ui, sans-serif;
+  pointer-events: none;
+  white-space: nowrap;
+  z-index: 9999;
+  backdrop-filter: blur(6px);
 }
 
-/* Reset button — top right, never overlaps anything */
+/* ── Reset pill button (used inside XR dom-overlay) ─────────────────────── */
 .reset-btn {
   position: fixed;
   top: 16px;
   right: 16px;
-  bottom: auto;
-  left: auto;
-  width: fit-content;
-  height: auto;
-  z-index: 10;
   padding: 8px 18px;
   background: rgba(40, 40, 40, 0.85);
   color: white;
@@ -49,8 +81,9 @@ html, body {
   font-size: 13px;
   font-weight: 600;
   cursor: pointer;
-  font-family: system-ui, sans-serif;
   backdrop-filter: blur(4px);
+  z-index: 9999;
+  pointer-events: auto;
 }
 
 .reset-btn:active {
