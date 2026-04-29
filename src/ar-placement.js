@@ -43,6 +43,16 @@
       this._controller.addEventListener("select", this._onSelect);
 
       // ── Session lifecycle ────────────────────────────────────────────────
+      // FIX: BLACK SCREEN — When entering AR, the renderer MUST have
+      // clearAlpha=0 and scene.background=null so the camera feed shows
+      // through the WebGL canvas. A-Frame's background component can override
+      // this, so we set it explicitly here every time AR is entered.
+      const sceneEl = this.el.sceneEl;
+      sceneEl.addEventListener("enter-vr", () => {
+        renderer.setClearColor(0x000000, 0); // alpha=0 → transparent
+        sceneEl.object3D.background = null;  // no skybox/color blocking camera
+      });
+
       renderer.xr.addEventListener("sessionstart", () => {
         this.hitTestSourceRequested = false;
         this.hitTestSource          = null;

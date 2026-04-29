@@ -85,14 +85,29 @@ export default function ARScene() {
         • embedded prevents A-Frame from going fullscreen on its own
         • ar-placement is our custom component (registered in ar-placement.js)
       */}
+      {/*
+        A-Frame Scene
+        ─────────────
+        FIX 1: NO 'background' component — it overrides WebGL alpha and causes
+                a black screen instead of the camera passthrough feed.
+                Camera transparency comes from renderer="alpha:true" alone.
+        FIX 2: NO 'embedded' — causes the canvas to get wrong dimensions on
+                mobile. Without it, A-Frame makes the canvas position:fixed
+                covering the full viewport, which is what we want for AR.
+        FIX 3: Model loaded once via <a-assets>, referenced by #id.
+      */}
       <a-scene
         webxr="requiredFeatures: hit-test; optionalFeatures: dom-overlay, light-estimation"
         renderer="antialias: true; alpha: true; colorManagement: true; physicallyCorrectLights: true"
-        background="transparent: true"
         vr-mode-ui="enabled: false"
-        embedded
+        xr-mode-ui="enabled: false"
         ar-placement
       >
+        {/* Preload model once — referenced as #glb-model below */}
+        <a-assets timeout="30000">
+          <a-asset-item id="glb-model" src={MODEL_URL} />
+        </a-assets>
+
         {/* Reticle ring — shown while scanning for a surface */}
         <a-torus
           id="ar-reticle"
@@ -104,40 +119,22 @@ export default function ARScene() {
           visible="false"
         />
 
-        {/* The GLB 3D model — hidden until placed */}
+        {/* GLB 3D model — hidden until placed, references asset above */}
         <a-entity
           id="ar-model"
-          gltf-model={MODEL_URL}
+          gltf-model="#glb-model"
           scale="3 3 3"
-          visible="false"
-          shadow="cast: true; receive: false"
-        />
-
-        {/* Invisible shadow-catching ground plane */}
-        <a-plane
-          id="ar-shadow-plane"
-          rotation="-90 0 0"
-          width="10"
-          height="10"
-          material="transparent: true; opacity: 0; src: none"
-          shadow="cast: false; receive: true"
           visible="false"
         />
 
         {/* Lighting */}
-        <a-light type="ambient"      color="#ffffff" intensity="0.6" />
+        <a-light type="ambient" color="#ffffff" intensity="0.7" />
         <a-light
           type="directional"
           color="#ffffff"
           intensity="1.0"
           position="-1 3 -1"
-          shadow="cast: true; shadowMapWidth: 1024; shadowMapHeight: 1024; shadowBias: -0.001"
         />
-
-        {/* Asset preloading */}
-        <a-assets>
-          <a-asset-item id="glb-model" src={MODEL_URL} />
-        </a-assets>
       </a-scene>
 
       {/* Landing screen shown before session */}
