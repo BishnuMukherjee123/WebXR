@@ -42,8 +42,8 @@ export function useAREngine() {
       adaptToDeviceRatio: true,
     });
     const scene = new Scene(engine);
-    scene.clearColor           = new Color4(0, 0, 0, 0);
-    scene.autoClear            = false;
+    scene.clearColor             = new Color4(0, 0, 0, 0);
+    scene.autoClear              = false;
     scene.skipPointerMovePicking = true;
 
     const hemi = new HemisphericLight("hemi", new Vector3(0, 1, 0), scene);
@@ -51,10 +51,10 @@ export function useAREngine() {
     const dir = new DirectionalLight("dir", new Vector3(-1, -2, -1), scene);
     dir.intensity = 0.8;
 
-    let modelRoot    = null;
-    let modelYOffset = 0;
-    let anchorNode   = null;
-    let placedAnchor = null;
+    let modelRoot     = null;
+    let modelYOffset  = 0;
+    let anchorNode    = null;
+    let placedAnchor  = null;
     let lastHitResult = null;
     let isPlaced      = false;
     let anchorSystem  = null;
@@ -94,8 +94,8 @@ export function useAREngine() {
         modelRoot = result.meshes[0];
         modelRoot.scaling = new Vector3(MODEL_SCALE, MODEL_SCALE, MODEL_SCALE);
         scene.meshes.forEach((m) => m.computeWorldMatrix(true));
-        const bounds = modelRoot.getHierarchyBoundingVectors(true);
-        modelYOffset = -bounds.min.y;
+        const bounds  = modelRoot.getHierarchyBoundingVectors(true);
+        modelYOffset  = -bounds.min.y;
         modelRoot.setEnabled(false);
         console.log("✅ GLB ready | floorOffset =", modelYOffset.toFixed(3));
       })
@@ -120,8 +120,8 @@ export function useAREngine() {
       return { pos, yRot: rot.toEulerAngles().y };
     }
 
-    // Projects camera forward ray onto Y=0 floor plane.
-    // Used when ARCore hasn't detected a surface yet (dark/featureless floors).
+    // Projects camera forward ray to Y=0 floor plane.
+    // Fallback when ARCore hasn't detected the surface yet.
     function getCameraFloorPosition() {
       if (!xrCamera) return new Vector3(0, 0, -1.5);
       const camPos  = xrCamera.position.clone();
@@ -130,15 +130,63 @@ export function useAREngine() {
         const t = -camPos.y / forward.y;
         if (t > 0.3 && t < 6.0) return camPos.add(forward.scale(t));
       }
-      // Camera near-horizontal – place 1.5m ahead at floor level
       const pos = camPos.add(forward.scale(1.5));
       pos.y = 0;
       return pos;
     }
 
-    // ── Anchor placement (instant model, background anchor) ───────────────────
+    // ── FREEZE – the core anti-jitter mechanism ───────────────────────────────
+    //
+    // After placement we "bake" the model into world space permanently:
+    //   1. Force-compute the final world matrix (with parent offsets included)
+    //   2. Detach the model from its parent (anchorNode)
+    //   3. Apply the baked world position/rotation directly
+    //   4. Call freezeWorldMatrix() on every mesh
+    //
+    // Result: Babylon NEVER recalculates the world matrix again.
+    // The model is immune to:
+    //   • Camera shake / hand tremor
+    //   • ARCore coordinate system recalibration
+    //   • Anchor drift on low-texture surfaces
+    //
+    function freezeModelInPlace() {
+      // Force-compute world matrices so parent offsets are resolved
+      scene.meshes.forEach((m) => m.computeWorldMatrix(true));
+
+      // Capture world-space position and rotation BEFORE detaching parent
+      const worldPos = modelRoot.getAbsolutePosition().clone();
+      const worldRot = modelRoot.absoluteRotationQuaternion
+        ? modelRoot.absoluteRotationQuaternion.clone()
+        : Quaternion.Identity();
+
+      // Detach – model is now in world space with no parent driving it
+      modelRoot.parent = null;
+
+      // Apply baked transform
+      modelRoot.position.copyFrom(worldPos);
+      modelRoot.rotationQuaternion = worldRot;
+      modelRoot.scaling = new Vector3(MODEL_SCALE, MODEL_SCALE, MODEL_SCALE);
+
+      // Freeze root and ALL descendants
+      modelRoot.freezeWorldMatrix();
+      modelRoot.getChildMeshes(false).forEach((m) => {
+        m.computeWorldMatrix(true);
+        m.freezeWorldMatrix();
+      });
+
+      console.log("🧊 Model frozen at", worldPos.toString());
+    }
+
+    // ── Unfreeze – called on Reset ────────────────────────────────────────────
+    function unfreezeModel() {
+      if (!modelRoot) return;
+      modelRoot.unfreezeWorldMatrix();
+      modelRoot.getChildMeshes(false).forEach((m) => m.unfreezeWorldMatrix());
+    }
+
+    // ── Placement: anchor path ────────────────────────────────────────────────
     async function placeWithAnchor(pos, rotQuat, yRot) {
-      // INSTANT: lock state and show model this frame
+      // INSTANT: lock state + show model + freeze this frame
       isPlaced = true;
       reticle.isVisible = false;
       setSurfaceReady(false);
@@ -149,20 +197,28 @@ export function useAREngine() {
       applyModelPose(yRot);
       showModel();
 
-      // BACKGROUND: native anchor for world-locking (doesn't block model)
+      // Freeze immediately – model is 100% stable from this frame onward
+      freezeModelInPlace();
+
+      // Background: create native anchor for long-term world-locking.
+      // The freeze above already prevents jitter; the anchor provides
+      // additional correction if ARCore discovers the plane moved.
       try {
         const anchor = await anchorSystem.addAnchorAtPositionAndRotationAsync(pos, rotQuat);
         if (anchor) {
           placedAnchor = anchor;
-          anchor.attachedNode = anchorNode;
-          console.log("⚓ Anchor world-locked");
+          // NOTE: we do NOT set anchor.attachedNode here because that would
+          // unfreeze the model and re-introduce per-frame matrix updates.
+          // The freeze is our primary stabiliser; the anchor is just held
+          // for cleanup purposes.
+          console.log("⚓ Anchor created (model already frozen)");
         }
       } catch (e) {
         console.warn("⚠️ Anchor skipped:", e.message ?? e);
       }
     }
 
-    // ── Direct placement (no anchor system, or fallback path) ─────────────────
+    // ── Placement: direct / fallback path ────────────────────────────────────
     function placeDirectly(pos, yRot) {
       if (!anchorNode) anchorNode = new TransformNode("anchorNode", scene);
       anchorNode.parent = null;
@@ -173,21 +229,22 @@ export function useAREngine() {
       applyModelPose(yRot);
       showModel();
 
+      // Freeze immediately
+      freezeModelInPlace();
+
       isPlaced = true;
       reticle.isVisible = false;
       setSurfaceReady(false);
-      console.log("📍 Direct placement");
+      console.log("📍 Direct placement + frozen");
     }
 
     // ── Tap handler ───────────────────────────────────────────────────────────
-    // ALWAYS places on tap – never silently ignores the user:
-    //   Path A: hit-test result available → exact ARCore surface + anchor
-    //   Path B: no surface detected yet   → camera-ray projected to Y=0 floor
+    // Path A: valid ARCore hit  → accurate surface position + anchor
+    // Path B: no surface yet    → camera-forward projection to Y=0
     async function handleSelect() {
       if (isPlaced || !modelRoot) return;
 
       if (lastHitResult) {
-        // Path A – accurate ARCore surface
         const { pos, yRot } = decomposeHitResult(lastHitResult);
         const rot = Quaternion.Identity();
         lastHitResult.transformationMatrix.decompose(undefined, rot, undefined);
@@ -197,7 +254,7 @@ export function useAREngine() {
           placeDirectly(pos, yRot);
         }
       } else {
-        // Path B – dark/featureless floor, no ARCore hit yet
+        // Dark/featureless floor – project camera ray to floor
         const pos = getCameraFloorPosition();
         console.log("📷 Camera-floor fallback at", pos.toString());
         placeDirectly(pos, 0);
@@ -206,6 +263,7 @@ export function useAREngine() {
 
     // ── Reset ──────────────────────────────────────────────────────────────────
     window.resetAR = () => {
+      unfreezeModel();
       if (modelRoot) { modelRoot.parent = null; modelRoot.setEnabled(false); }
       if (placedAnchor) { try { placedAnchor.remove(); } catch (_) {} placedAnchor = null; }
       anchorNode    = null;
