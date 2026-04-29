@@ -1,30 +1,17 @@
-import { useEffect, useRef, useState } from "react";
+import { useEffect, useState } from "react";
 import AROverlay from "./AROverlay";
 import ARLanding from "./ARLanding";
 
-// Import the custom A-Frame component registration.
-// It runs immediately and calls AFRAME.registerComponent().
-// A-Frame (loaded via CDN in index.html) is guaranteed to be on window by now.
-import "../ar-placement.js";
-
-const MODEL_URL = "https://iskchovltfnohyftjckg.supabase.co/storage/v1/object/public/models/10.glb";
-
 /**
- * ARScene
- *
- * Renders an A-Frame scene as JSX custom elements.
- * React passes these through as-is because they are browser-registered
- * custom elements (registered by A-Frame's CDN script in index.html).
- *
- * DOM Overlay root (#ar-overlay) is ALWAYS in the DOM so the XR session
- * can reference it before and during the session.
+ * ARScene — React UI layer only.
+ * The actual A-Frame 3D scene lives in index.html (outside React).
+ * This component listens to CustomEvents from ar-placement.js
+ * and renders the correct UI on top.
  */
 export default function ARScene() {
-  const overlayRef    = useRef(null);
   const [inSession,    setInSession]    = useState(false);
   const [surfaceReady, setSurfaceReady] = useState(false);
 
-  // ── Listen to A-Frame → React events ──────────────────────────────────
   useEffect(() => {
     const onStart   = ()  => setInSession(true);
     const onEnd     = ()  => { setInSession(false); setSurfaceReady(false); };
@@ -43,102 +30,14 @@ export default function ARScene() {
     };
   }, []);
 
-  // ── Wire DOM overlay element into the a-scene after mount ─────────────
-  useEffect(() => {
-    const scene = document.querySelector("a-scene");
-    if (scene && overlayRef.current) {
-      // Inject overlay element reference for the WebXR session init.
-      // A-Frame 1.6 reads overlayElement from the webxr component data.
-      scene.setAttribute(
-        "webxr",
-        `requiredFeatures: hit-test; optionalFeatures: dom-overlay, light-estimation; overlayElement: #ar-overlay`
-      );
-    }
-  }, []);
-
   return (
-    <>
-      {/*
-        DOM Overlay root — ALWAYS in DOM, never conditionally rendered.
-        WebXR spec requires this element to exist before the session starts.
-        id="ar-overlay" is referenced by the webxr component above.
-      */}
-      <div
-        ref={overlayRef}
-        id="ar-overlay"
-        style={{
-          position: "fixed", inset: 0,
-          zIndex: 10,
-          pointerEvents: "none", // non-UI areas pass taps to XR canvas
-        }}
-      >
-        {inSession && (
-          <AROverlay surfaceReady={surfaceReady} />
-        )}
-      </div>
+    // pointer-events: none so taps pass through to the A-Frame canvas below
+    <div style={{ position: "fixed", inset: 0, zIndex: 10, pointerEvents: "none" }}>
+      {/* In-session HUD — buttons, scan hint */}
+      {inSession && <AROverlay surfaceReady={surfaceReady} />}
 
-      {/*
-        A-Frame Scene
-        ─────────────
-        • webxr attribute requests hit-test + optional dom-overlay features
-        • vr-mode-ui="enabled:false" hides A-Frame's default VR headset button
-        • embedded prevents A-Frame from going fullscreen on its own
-        • ar-placement is our custom component (registered in ar-placement.js)
-      */}
-      {/*
-        A-Frame Scene
-        ─────────────
-        FIX 1: NO 'background' component — it overrides WebGL alpha and causes
-                a black screen instead of the camera passthrough feed.
-                Camera transparency comes from renderer="alpha:true" alone.
-        FIX 2: NO 'embedded' — causes the canvas to get wrong dimensions on
-                mobile. Without it, A-Frame makes the canvas position:fixed
-                covering the full viewport, which is what we want for AR.
-        FIX 3: Model loaded once via <a-assets>, referenced by #id.
-      */}
-      <a-scene
-        webxr="requiredFeatures: hit-test; optionalFeatures: dom-overlay, light-estimation"
-        renderer="antialias: true; alpha: true; colorManagement: true; physicallyCorrectLights: true"
-        vr-mode-ui="enabled: false"
-        xr-mode-ui="enabled: false"
-        ar-placement
-      >
-        {/* Preload model once — referenced as #glb-model below */}
-        <a-assets timeout="30000">
-          <a-asset-item id="glb-model" src={MODEL_URL} />
-        </a-assets>
-
-        {/* Reticle ring — shown while scanning for a surface */}
-        <a-torus
-          id="ar-reticle"
-          radius="0.18"
-          radius-tubular="0.012"
-          segments-tubular="64"
-          rotation="-90 0 0"
-          material="color: white; shader: flat; opacity: 0.85"
-          visible="false"
-        />
-
-        {/* GLB 3D model — hidden until placed, references asset above */}
-        <a-entity
-          id="ar-model"
-          gltf-model="#glb-model"
-          scale="3 3 3"
-          visible="false"
-        />
-
-        {/* Lighting */}
-        <a-light type="ambient" color="#ffffff" intensity="0.7" />
-        <a-light
-          type="directional"
-          color="#ffffff"
-          intensity="1.0"
-          position="-1 3 -1"
-        />
-      </a-scene>
-
-      {/* Landing screen shown before session */}
+      {/* Pre-session landing screen */}
       {!inSession && <ARLanding />}
-    </>
+    </div>
   );
 }
