@@ -47,7 +47,7 @@
       // clearAlpha=0 and scene.background=null so the camera feed shows
       // through the WebGL canvas. A-Frame's background component can override
       // this, so we set it explicitly here every time AR is entered.
-      const sceneEl = this.el.sceneEl;
+      // NOTE: sceneEl is already declared above at line 30 — no re-declaration.
       sceneEl.addEventListener("enter-vr", () => {
         renderer.setClearColor(0x000000, 0); // alpha=0 → transparent
         sceneEl.object3D.background = null;  // no skybox/color blocking camera
