@@ -9,6 +9,7 @@ import {
   WebXRFeatureName,
   WebXRState,
   Quaternion,
+  TransformNode,
   MeshBuilder,
   StandardMaterial,
   Color3,
@@ -41,24 +42,26 @@ export default function ARScene() {
     const dir = new DirectionalLight("dir", new Vector3(-1, -2, -1), scene);
     dir.intensity = 0.9;
 
-    // ── Mutable state ───────────────────────────────────────────────────
-    let modelRoot = null;
-    let lastHitResult = null;
-    let isPlaced = false;
+    // ── State ───────────────────────────────────────────────────────────
+    let modelRoot   = null;   // the GLTF __root__ mesh
+    let anchorNode  = null;   // TransformNode that the native anchor drives
+    let placedAnchor = null;  // the WebXR anchor object
+    let lastHitResult = null; // most recent hit-test frame result
+    let isPlaced    = false;
+    let xrCamera    = null;
+    let anchorSystem = null;
     let selectCleanup = null;
-    let xrCamera = null;
 
-    // ── Reticle ─────────────────────────────────────────────────────────
+    // ── Reticle (visible while scanning, hidden after placement) ─────────
     const reticle = MeshBuilder.CreateDisc(
       "reticle",
       { radius: 0.28, tessellation: 48 },
       scene
     );
-    reticle.isVisible = false;
-    reticle.rotationQuaternion = Quaternion.Identity();
-    // Rotate the disc to lie flat (it starts vertical by default)
     reticle.rotation.x = Math.PI / 2;
     reticle.bakeCurrentTransformIntoVertices();
+    reticle.isVisible = false;
+    reticle.rotationQuaternion = Quaternion.Identity();
 
     const reticleMat = new StandardMaterial("reticleMat", scene);
     reticleMat.emissiveColor = new Color3(1, 1, 1);
@@ -77,25 +80,54 @@ export default function ARScene() {
       })
       .catch((err) => console.error("❌ GLB error:", err));
 
-    // ── Compute placement position ───────────────────────────────────────
-    // If we have a hardware hit result, use it.
-    // If not, project 1.5 m in front of the camera onto Y=0 (floor level in
-    // local-floor reference space). This means the model ALWAYS appears on tap.
+    // ── Show the model attached to an anchorNode ─────────────────────────
+    function mountModelOnAnchor(position, yRotation) {
+      if (!modelRoot) return;
+
+      // Create a parent node that the native anchor will drive every frame
+      if (!anchorNode) {
+        anchorNode = new TransformNode("anchorNode", scene);
+      }
+
+      // Parent the model under the anchor node
+      modelRoot.parent = anchorNode;
+
+      // Local offset inside the anchor node: zero position, face the camera
+      modelRoot.position = Vector3.Zero();
+      modelRoot.rotationQuaternion = null;
+      modelRoot.rotation = new Vector3(0, yRotation, 0);
+
+      // Enable all meshes
+      modelRoot.setEnabled(true);
+      modelRoot.getChildMeshes(false).forEach((m) => (m.isVisible = true));
+
+      // Place the anchor node at the hit position
+      anchorNode.position.copyFrom(position);
+
+      isPlaced = true;
+      reticle.isVisible = false;
+      console.log("✅ Model mounted at", position.toString());
+    }
+
+    // ── Compute the Y angle to face the camera ───────────────────────────
+    function getCameraFacingY(position) {
+      if (!xrCamera) return 0;
+      const toCamera = xrCamera.position.subtract(position);
+      return Math.atan2(toCamera.x, toCamera.z);
+    }
+
+    // ── Get placement position (hit-test or camera-ray fallback) ─────────
     function getPlacementTransform() {
       if (lastHitResult) {
         const pos = new Vector3();
         const rot = new Quaternion();
         lastHitResult.transformationMatrix.decompose(undefined, rot, pos);
-        return { pos, rot };
+        return { pos, hasHit: true };
       }
-
-      // Fallback – use camera forward ray projected to floor (Y = 0)
+      // Fallback – project camera forward to Y=0 floor
       if (xrCamera) {
         const camPos = xrCamera.position.clone();
         const forward = xrCamera.getForwardRay().direction;
-
-        // Solve: camPos.y + t * forward.y = 0 → t = -camPos.y / forward.y
-        // If forward.y is near zero (looking straight ahead), default to 1.5m in front
         let pos;
         if (Math.abs(forward.y) > 0.01) {
           const t = -camPos.y / forward.y;
@@ -104,60 +136,74 @@ export default function ARScene() {
           pos = camPos.add(forward.scale(1.5));
           pos.y = 0;
         }
-
-        const rot = Quaternion.Identity();
-        return { pos, rot };
+        return { pos, hasHit: false };
       }
-
-      // Last-resort: place at world origin
-      return { pos: new Vector3(0, 0, -1.5), rot: Quaternion.Identity() };
+      return { pos: new Vector3(0, 0, -1.5), hasHit: false };
     }
 
-    // ── Place / lock the model ────────────────────────────────────────────
-    function placeModel() {
-      if (!modelRoot) { console.warn("⚠️ Model not loaded yet"); return; }
-      if (isPlaced) return;
+    // ── Place (called on tap) ────────────────────────────────────────────
+    async function handleSelect() {
+      if (isPlaced || !modelRoot) return;
 
-      const { pos, rot } = getPlacementTransform();
+      const { pos, hasHit } = getPlacementTransform();
+      const yRot = getCameraFacingY(pos);
 
-      // Enable and unhide the full GLTF hierarchy
-      modelRoot.setEnabled(true);
-      modelRoot.getChildMeshes(false).forEach((m) => (m.isVisible = true));
+      // ── Try native anchor first (zero drift) ──────────────────────────
+      if (hasHit && anchorSystem) {
+        try {
+          const anchor = await anchorSystem.addAnchorPointUsingHitTestResultAsync(
+            lastHitResult
+          );
+          if (anchor) {
+            placedAnchor = anchor;
 
-      modelRoot.position.copyFrom(pos);
+            // Create anchor node and let Babylon drive it every frame
+            if (!anchorNode) anchorNode = new TransformNode("anchorNode", scene);
+            anchor.attachedNode = anchorNode;
 
-      // Rotate the model to face the camera (Y axis only so it stays upright).
-      // This is the same "angle-changing" feature the reticle had – now applied
-      // directly to the food model so it always presents its front face to the user.
-      if (xrCamera) {
-        const camPos = xrCamera.position.clone();
-        const toCamera = camPos.subtract(pos);          // vector from model → camera
-        const yAngle = Math.atan2(toCamera.x, toCamera.z); // horizontal angle only
-        modelRoot.rotationQuaternion = null;
-        modelRoot.rotation = new Vector3(0, yAngle, 0);
-      } else {
-        // Fallback – use surface normal Y rotation from hit test
-        const euler = rot.toEulerAngles();
-        modelRoot.rotationQuaternion = null;
-        modelRoot.rotation = new Vector3(0, euler.y, 0);
+            // Mount model under the anchor-driven node
+            modelRoot.parent = anchorNode;
+            modelRoot.position = Vector3.Zero();
+            modelRoot.rotationQuaternion = null;
+            modelRoot.rotation = new Vector3(0, yRot, 0);
+            modelRoot.setEnabled(true);
+            modelRoot.getChildMeshes(false).forEach((m) => (m.isVisible = true));
+
+            isPlaced = true;
+            reticle.isVisible = false;
+            console.log("⚓ Anchor placed – zero drift mode");
+            return; // anchor path succeeded, done
+          }
+        } catch (e) {
+          console.warn("⚠️ Anchor failed, falling back to direct placement:", e);
+        }
       }
 
-      // Freeze world matrix → zero CPU cost, zero drift, size never changes
+      // ── Fallback: direct placement (frozen in local-floor space) ──────
+      mountModelOnAnchor(pos, yRot);
+
+      // Freeze so Babylon never recalculates and the model doesn't jitter
       modelRoot.freezeWorldMatrix();
       modelRoot.getChildMeshes(false).forEach((m) => m.freezeWorldMatrix());
 
-      isPlaced = true;
-      reticle.isVisible = false;
-      console.log("📍 Placed at", pos.toString(), "| hitTest?", !!lastHitResult);
+      console.log("📍 Direct placement (no anchor)");
     }
 
-    // ── Reset ─────────────────────────────────────────────────────────────
+    // ── Reset ────────────────────────────────────────────────────────────
     window.resetAR = () => {
       if (modelRoot) {
-        modelRoot.unfreezeWorldMatrix();
-        modelRoot.getChildMeshes(false).forEach((m) => m.unfreezeWorldMatrix());
+        modelRoot.parent = null;
+        try { modelRoot.unfreezeWorldMatrix(); } catch (_) {}
+        modelRoot.getChildMeshes(false).forEach((m) => {
+          try { m.unfreezeWorldMatrix(); } catch (_) {}
+        });
         modelRoot.setEnabled(false);
       }
+      if (placedAnchor) {
+        try { placedAnchor.remove(); } catch (_) {}
+        placedAnchor = null;
+      }
+      anchorNode = null;
       isPlaced = false;
       lastHitResult = null;
       reticle.isVisible = false;
@@ -185,17 +231,23 @@ export default function ARScene() {
           });
         } catch (_) {}
 
-        // Hit test – runs silently in the background to improve placement accuracy
+        // Hit test
         const hitTest = fm.enableFeature(WebXRFeatureName.HIT_TEST, "latest");
+
+        // Anchor system (optional – gracefully disabled if not supported)
+        try {
+          anchorSystem = fm.enableFeature(WebXRFeatureName.ANCHOR_SYSTEM, "latest");
+          console.log("⚓ AnchorSystem enabled");
+        } catch (e) {
+          console.warn("⚠️ AnchorSystem not available:", e);
+        }
+
+        // Update reticle from hit-test (only while not yet placed)
         hitTest.onHitTestResultObservable.add((results) => {
-          if (isPlaced) {
-            reticle.isVisible = false;
-            return;
-          }
+          if (isPlaced) { reticle.isVisible = false; return; }
           if (results.length > 0) {
             lastHitResult = results[0];
             reticle.isVisible = true;
-
             const pos = new Vector3();
             const rot = new Quaternion();
             results[0].transformationMatrix.decompose(undefined, rot, pos);
@@ -207,31 +259,21 @@ export default function ARScene() {
           }
         });
 
-        // ── State changes ────────────────────────────────────────────────
+        // Session state
         xr.baseExperience.onStateChangedObservable.add((state) => {
           if (state === WebXRState.IN_XR) {
             setInSession(true);
-
-            // Cache the XR camera for fallback placement
             xrCamera = xr.baseExperience.camera;
 
-            // Attach native select (tap) listener
             const session = xr.baseExperience.sessionManager.session;
-            const onSelect = () => placeModel();
+            const onSelect = () => handleSelect();
             session.addEventListener("select", onSelect);
             selectCleanup = () => session.removeEventListener("select", onSelect);
-            console.log("✅ select listener ready");
+            console.log("✅ XR session ready");
           } else {
             setInSession(false);
-            isPlaced = false;
-            lastHitResult = null;
             xrCamera = null;
-            reticle.isVisible = false;
-            if (modelRoot) {
-              modelRoot.unfreezeWorldMatrix();
-              modelRoot.getChildMeshes(false).forEach((m) => m.unfreezeWorldMatrix());
-              modelRoot.setEnabled(false);
-            }
+            window.resetAR();
             if (selectCleanup) { selectCleanup(); selectCleanup = null; }
           }
         });
@@ -260,7 +302,6 @@ export default function ARScene() {
         }}
       />
 
-      {/* DOM Overlay */}
       <div
         ref={overlayRef}
         style={{ position: "fixed", inset: 0, pointerEvents: "none", zIndex: 10 }}
@@ -294,7 +335,6 @@ export default function ARScene() {
         )}
       </div>
 
-      {/* Landing */}
       {!inSession && (
         <div style={{
           position: "fixed", inset: 0, background: "#111",
@@ -306,7 +346,7 @@ export default function ARScene() {
             color: "#aaa", fontSize: 14, marginBottom: 28,
             textAlign: "center", maxWidth: 300, lineHeight: 1.6,
           }}>
-            Open the camera, then tap anywhere to instantly place your model.
+            Open the camera and tap to place your dish model.
           </p>
           <button
             onClick={() => {
