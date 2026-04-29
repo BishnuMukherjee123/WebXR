@@ -35,8 +35,12 @@ export function useAREngine() {
     const canvas = canvasRef.current;
     if (!canvas) return;
 
-    const engine = new Engine(canvas, true, { preserveDrawingBuffer: true, stencil: true, adaptToDeviceRatio: true });
-    const scene  = new Scene(engine);
+    const engine = new Engine(canvas, true, {
+      preserveDrawingBuffer: true,
+      stencil: true,
+      adaptToDeviceRatio: true,
+    });
+    const scene = new Scene(engine);
     scene.clearColor             = new Color4(0, 0, 0, 0);
     scene.autoClear              = false;
     scene.skipPointerMovePicking = true;
@@ -45,7 +49,6 @@ export function useAREngine() {
     new DirectionalLight("dir",  new Vector3(-1, -2, -1), scene).intensity = 0.8;
 
     let modelRoot     = null;
-    let modelYOffset  = 0;
     let anchorNode    = null;
     let placedAnchor  = null;
     let lastHitResult = null;
@@ -54,15 +57,15 @@ export function useAREngine() {
     let xrCamera      = null;
     let selectCleanup = null;
     let stableCount   = 0;
+    let shadowDisc    = null; // floor contact shadow
 
     const _lerpPos = new Vector3();
     const _lerpRot = Quaternion.Identity();
 
-    // ── Diagonal surface plane visualization ──────────────────────────────────
-    const PLANE_SIZE   = 1.4;
+    // ── Diagonal surface plane (shown while scanning) ─────────────────────────
     const surfacePlane = MeshBuilder.CreateGround(
       "surfacePlane",
-      { width: PLANE_SIZE, height: PLANE_SIZE, subdivisions: 1 },
+      { width: 1.4, height: 1.4, subdivisions: 1 },
       scene
     );
     surfacePlane.isVisible  = false;
@@ -70,16 +73,15 @@ export function useAREngine() {
 
     const TEX     = 128;
     const diagTex = new DynamicTexture("diagTex", { width: TEX, height: TEX }, scene, false);
-    const ctx     = diagTex.getContext();
-    ctx.clearRect(0, 0, TEX, TEX);
-    ctx.strokeStyle = "rgba(80, 200, 255, 0.9)";
-    ctx.lineWidth   = 1.5;
+    const dCtx    = diagTex.getContext();
+    dCtx.clearRect(0, 0, TEX, TEX);
+    dCtx.strokeStyle = "rgba(80, 200, 255, 0.9)";
+    dCtx.lineWidth   = 1.5;
     for (let i = -TEX; i < TEX * 2; i += 14) {
-      ctx.beginPath(); ctx.moveTo(i, 0); ctx.lineTo(i + TEX, TEX); ctx.stroke();
+      dCtx.beginPath(); dCtx.moveTo(i, 0); dCtx.lineTo(i + TEX, TEX); dCtx.stroke();
     }
     diagTex.hasAlpha = true;
     diagTex.update();
-
     const surfaceMat = new StandardMaterial("surfaceMat", scene);
     surfaceMat.diffuseTexture  = diagTex;
     surfaceMat.emissiveColor   = new Color3(0.3, 0.8, 1.0);
@@ -88,7 +90,46 @@ export function useAREngine() {
     surfaceMat.disableLighting = true;
     surfacePlane.material      = surfaceMat;
 
-    // ── Reticle ring ──────────────────────────────────────────────────────────
+    // ── Soft blob shadow (shown after placement) ──────────────────────────────
+    // Simulates the contact shadow a real object casts on the floor.
+    // Radial gradient: dark/opaque at center, fully transparent at edge.
+    // This is the most important visual cue that the model is ON the floor.
+    function createShadowDisc(cx, cz) {
+      const disc = MeshBuilder.CreateDisc(
+        "shadow",
+        { radius: 0.32, tessellation: 48 },
+        scene
+      );
+      // Lay flat on the floor
+      disc.rotation.x  = Math.PI / 2;
+      disc.position.x  = cx;
+      disc.position.y  = 0.003; // 3 mm above floor so it renders above the surface
+      disc.position.z  = cz;
+      disc.isPickable  = false;
+
+      const S   = 256;
+      const tex = new DynamicTexture("shadowTex", { width: S, height: S }, scene, false);
+      const sCtx = tex.getContext();
+      const grad = sCtx.createRadialGradient(S / 2, S / 2, 0, S / 2, S / 2, S / 2);
+      grad.addColorStop(0.0,  "rgba(0,0,0,0.72)");  // dark centre
+      grad.addColorStop(0.45, "rgba(0,0,0,0.38)");  // mid
+      grad.addColorStop(1.0,  "rgba(0,0,0,0.00)");  // transparent edge
+      sCtx.fillStyle = grad;
+      sCtx.fillRect(0, 0, S, S);
+      tex.hasAlpha = true;
+      tex.update();
+
+      const mat = new StandardMaterial("shadowMat", scene);
+      mat.diffuseTexture  = tex;
+      mat.alpha           = 0.7;
+      mat.disableLighting = true;
+      mat.backFaceCulling = false;
+      mat.zOffset         = -2;   // renders above the floor plane
+      disc.material       = mat;
+      return disc;
+    }
+
+    // ── Reticle ring (shown while scanning) ───────────────────────────────────
     const reticle = MeshBuilder.CreateTorus(
       "reticle",
       { diameter: 0.55, thickness: 0.016, tessellation: 48 },
@@ -104,6 +145,7 @@ export function useAREngine() {
     reticleMat.backFaceCulling = false;
     reticle.material           = reticleMat;
 
+    // Per-frame: smooth reticle + surface plane toward detected hit position
     scene.registerBeforeRender(() => {
       if (isPlaced || !lastHitResult) { surfacePlane.isVisible = false; return; }
       lastHitResult.transformationMatrix.decompose(undefined, _lerpRot, _lerpPos);
@@ -120,11 +162,8 @@ export function useAREngine() {
       .then((result) => {
         modelRoot = result.meshes[0];
         modelRoot.scaling = new Vector3(MODEL_SCALE, MODEL_SCALE, MODEL_SCALE);
-        scene.meshes.forEach((m) => m.computeWorldMatrix(true));
-        const bounds = modelRoot.getHierarchyBoundingVectors(true);
-        modelYOffset = -bounds.min.y;
         modelRoot.setEnabled(false);
-        console.log("GLB bounds min.y:", bounds.min.y.toFixed(3), "-> offset:", modelYOffset.toFixed(3));
+        console.log("GLB loaded");
       })
       .catch((err) => console.error("GLB error:", err));
 
@@ -132,13 +171,6 @@ export function useAREngine() {
     function showModel() {
       modelRoot.setEnabled(true);
       modelRoot.getChildMeshes(false).forEach((m) => (m.isVisible = true));
-    }
-
-    // Place model so its bottom sits exactly at anchorNode Y (= floor Y = 0)
-    function applyModelPose(yRot) {
-      modelRoot.position           = new Vector3(0, modelYOffset, 0);
-      modelRoot.rotationQuaternion = null;
-      modelRoot.rotation           = new Vector3(0, yRot, 0);
     }
 
     function decomposeHitResult(hitResult) {
@@ -161,7 +193,25 @@ export function useAREngine() {
       return pos;
     }
 
-    // Bake world matrix: detach parent, freeze all meshes
+    // ── LIVE BOUNDS CORRECTION ────────────────────────────────────────────────
+    // Problem: computing bounds at load-time (before XR starts) gives wrong
+    // values because the XR coordinate system isn't active yet.
+    // Solution: compute bounds AFTER showModel() in live world space, then
+    // shift the model DOWN by exactly how much its base is above Y=0.
+    // This guarantees the model's visual bottom is flush with the floor.
+    function snapModelToFloor() {
+      // Force full world matrix resolution for every mesh
+      scene.meshes.forEach((m) => m.computeWorldMatrix(true));
+      const bounds = modelRoot.getHierarchyBoundingVectors(true);
+      const gap    = bounds.min.y; // positive = model is floating above Y=0
+      if (Math.abs(gap) > 0.0005) {
+        anchorNode.position.y -= gap; // push anchorNode down by the gap
+        scene.meshes.forEach((m) => m.computeWorldMatrix(true)); // re-resolve
+        console.log("Floor snap: corrected gap =", gap.toFixed(4), "m");
+      }
+    }
+
+    // Bake world matrix permanently – immune to camera shake / ARCore drift
     function freezeModelInPlace() {
       scene.meshes.forEach((m) => m.computeWorldMatrix(true));
       const worldPos = modelRoot.getAbsolutePosition().clone();
@@ -173,8 +223,11 @@ export function useAREngine() {
       modelRoot.rotationQuaternion = worldRot;
       modelRoot.scaling            = new Vector3(MODEL_SCALE, MODEL_SCALE, MODEL_SCALE);
       modelRoot.freezeWorldMatrix();
-      modelRoot.getChildMeshes(false).forEach((m) => { m.computeWorldMatrix(true); m.freezeWorldMatrix(); });
-      console.log("Model frozen at Y:", worldPos.y.toFixed(3));
+      modelRoot.getChildMeshes(false).forEach((m) => {
+        m.computeWorldMatrix(true);
+        m.freezeWorldMatrix();
+      });
+      console.log("Model frozen at Y:", worldPos.y.toFixed(4));
     }
 
     function unfreezeModel() {
@@ -183,56 +236,71 @@ export function useAREngine() {
       modelRoot.getChildMeshes(false).forEach((m) => m.unfreezeWorldMatrix());
     }
 
-    // ── Placement helpers ─────────────────────────────────────────────────────
-    async function placeWithAnchor(pos, rotQuat, yRot) {
-      isPlaced = true;
-      reticle.isVisible = false; surfacePlane.isVisible = false;
-      setSurfaceReady(false);
+    // ── Place model: common finalization ──────────────────────────────────────
+    function finalizeModelPlacement(floorX, floorZ, yRot) {
       if (!anchorNode) anchorNode = new TransformNode("anchorNode", scene);
-      anchorNode.position.copyFrom(pos);
-      modelRoot.parent = anchorNode;
-      applyModelPose(yRot);
+      anchorNode.parent   = null;
+      // Start at floor level; snapModelToFloor() will fine-tune
+      anchorNode.position = new Vector3(floorX, 0, floorZ);
+      anchorNode.rotation = Vector3.Zero();
+
+      modelRoot.parent             = anchorNode;
+      modelRoot.position           = new Vector3(0, 0, 0); // snap will set final Y
+      modelRoot.rotationQuaternion = null;
+      modelRoot.rotation           = new Vector3(0, yRot, 0);
+      modelRoot.scaling            = new Vector3(MODEL_SCALE, MODEL_SCALE, MODEL_SCALE);
+
       showModel();
+
+      // Live bounds snap — corrects any bounding-box error in real XR world space
+      snapModelToFloor();
+
+      // Freeze ALL meshes so no per-frame jitter can move the model
       freezeModelInPlace();
+
+      // Add soft contact shadow at the model's XZ floor position
+      if (shadowDisc) { shadowDisc.dispose(); shadowDisc = null; }
+      shadowDisc = createShadowDisc(floorX, floorZ);
+
+      isPlaced               = true;
+      reticle.isVisible      = false;
+      surfacePlane.isVisible = false;
+      setSurfaceReady(false);
+    }
+
+    // ── Placement: with anchor (world-lock) ───────────────────────────────────
+    async function placeWithAnchor(floorX, floorZ, rotQuat, yRot) {
+      finalizeModelPlacement(floorX, floorZ, yRot);
+      const pos = new Vector3(floorX, 0, floorZ);
       try {
         const anchor = await anchorSystem.addAnchorAtPositionAndRotationAsync(pos, rotQuat);
         if (anchor) { placedAnchor = anchor; console.log("Anchor created"); }
       } catch (e) { console.warn("Anchor skipped:", e.message ?? e); }
     }
 
-    function placeDirectly(pos, yRot) {
-      if (!anchorNode) anchorNode = new TransformNode("anchorNode", scene);
-      anchorNode.parent = null;
-      anchorNode.position.copyFrom(pos);
-      anchorNode.rotation = Vector3.Zero();
-      modelRoot.parent = anchorNode;
-      applyModelPose(yRot);
-      showModel();
-      freezeModelInPlace();
-      isPlaced = true;
-      reticle.isVisible = false; surfacePlane.isVisible = false;
-      setSurfaceReady(false);
-    }
-
     // ── Tap handler ───────────────────────────────────────────────────────────
-    // KEY FIX: Always force pos.y = 0 before placement.
-    // In local-floor space Y=0 IS the physical floor.
-    // ARCore hit-test sometimes returns Y = 0.02..0.08m (a few cm above floor)
-    // which makes the model visually float above the surface plane.
-    // Clamping to Y=0 locks the model to the physical floor regardless.
     async function handleSelect() {
       if (isPlaced || !modelRoot) return;
 
+      let floorX, floorZ, yRot, rotQuat;
+
       if (lastHitResult) {
-        const { pos, yRot } = decomposeHitResult(lastHitResult);
-        pos.y = 0;  // lock to physical floor – eliminates floating
-        const rot = Quaternion.Identity();
-        lastHitResult.transformationMatrix.decompose(undefined, rot, undefined);
-        anchorSystem ? await placeWithAnchor(pos, rot, yRot) : placeDirectly(pos, yRot);
+        const { pos, yRot: yr } = decomposeHitResult(lastHitResult);
+        floorX = pos.x;
+        floorZ = pos.z;
+        yRot   = yr;
+        rotQuat = Quaternion.Identity();
+        lastHitResult.transformationMatrix.decompose(undefined, rotQuat, undefined);
       } else {
         const pos = getCameraFloorPosition();
-        pos.y = 0;  // always floor-locked
-        placeDirectly(pos, 0);
+        floorX = pos.x; floorZ = pos.z; yRot = 0;
+      }
+
+      // Always Y=0: physical floor in local-floor reference space
+      if (anchorSystem && rotQuat) {
+        await placeWithAnchor(floorX, floorZ, rotQuat, yRot);
+      } else {
+        finalizeModelPlacement(floorX, floorZ, yRot);
       }
     }
 
@@ -241,6 +309,7 @@ export function useAREngine() {
       unfreezeModel();
       if (modelRoot)    { modelRoot.parent = null; modelRoot.setEnabled(false); }
       if (placedAnchor) { try { placedAnchor.remove(); } catch (_) {} placedAnchor = null; }
+      if (shadowDisc)   { shadowDisc.dispose(); shadowDisc = null; }
       anchorNode = null; isPlaced = false; lastHitResult = null; stableCount = 0;
       reticle.isVisible = false; surfacePlane.isVisible = false;
       setSurfaceReady(false);
