@@ -19,9 +19,10 @@ import "@babylonjs/loaders/glTF";
 import { SceneLoader } from "@babylonjs/core/Loading/sceneLoader";
 
 const MODEL_URL         = "https://iskchovltfnohyftjckg.supabase.co/storage/v1/object/public/models/10.glb";
-const MODEL_SCALE       = 3.0;
-const RETICLE_LERP      = 0.12;
-const STABLE_FRAMES_REQ = 4;
+const MODEL_SCALE        = 3.0;
+const RETICLE_LERP       = 0.12;
+const STABLE_FRAMES_REQ  = 6;      // consecutive frames required for confidence
+const VARIANCE_THRESHOLD = 0.018;  // 1.8 cm – max allowed XZ drift between frames
 
 export function useAREngine() {
   const canvasRef   = useRef(null);
@@ -57,7 +58,8 @@ export function useAREngine() {
     let xrCamera      = null;
     let selectCleanup = null;
     let stableCount   = 0;
-    let shadowDisc    = null; // floor contact shadow
+    let stableBuffer  = [];   // ring buffer of recent hit positions for variance check
+    let shadowDisc    = null;
 
     const _lerpPos = new Vector3();
     const _lerpRot = Quaternion.Identity();
@@ -310,7 +312,8 @@ export function useAREngine() {
       if (modelRoot)    { modelRoot.parent = null; modelRoot.setEnabled(false); }
       if (placedAnchor) { try { placedAnchor.remove(); } catch (_) {} placedAnchor = null; }
       if (shadowDisc)   { shadowDisc.dispose(); shadowDisc = null; }
-      anchorNode = null; isPlaced = false; lastHitResult = null; stableCount = 0;
+      anchorNode = null; isPlaced = false; lastHitResult = null;
+      stableCount = 0; stableBuffer = [];
       reticle.isVisible = false; surfacePlane.isVisible = false;
       setSurfaceReady(false);
     };
@@ -326,15 +329,58 @@ export function useAREngine() {
       const fm = xr.baseExperience.featuresManager;
       try { fm.enableFeature(WebXRFeatureName.DOM_OVERLAY, "latest", { element: overlayRef.current }); } catch (_) {}
 
-      const hitTest = fm.enableFeature(WebXRFeatureName.HIT_TEST, "latest");
+      // ── TRUE Stable Surface Detection ────────────────────────────────────
+      // Two-layer filter:
+      //   Layer 1 – entityTypes: only accept hits on DETECTED PLANES or MESH.
+      //             Rejects noisy point hits on un-mapped surfaces (the main
+      //             source of reticle jitter and false detections).
+      //   Layer 2 – position variance: the hit XZ must not drift more than
+      //             VARIANCE_THRESHOLD between consecutive frames. If the
+      //             surface keeps moving, the count resets.
+      const hitTest = fm.enableFeature(WebXRFeatureName.HIT_TEST, "latest", {
+        entityTypes: ["plane", "mesh"],  // plane = ARCore detected planes (most stable)
+        enableTransientHitTest: false,   // persistent source, not one-shot
+      });
+
+      function isPositionStable(newPos) {
+        // Keep only the last STABLE_FRAMES_REQ positions
+        stableBuffer.push(new Vector3(newPos.x, 0, newPos.z)); // only check XZ
+        if (stableBuffer.length > STABLE_FRAMES_REQ) stableBuffer.shift();
+        if (stableBuffer.length < STABLE_FRAMES_REQ) return false;
+        // Compute centroid
+        const centroid = stableBuffer.reduce(
+          (acc, p) => acc.addInPlace(p), new Vector3(0, 0, 0)
+        ).scaleInPlace(1 / stableBuffer.length);
+        // Reject if any sample is too far from centroid
+        return stableBuffer.every(
+          (p) => Vector3.Distance(p, centroid) < VARIANCE_THRESHOLD
+        );
+      }
+
       hitTest.onHitTestResultObservable.add((results) => {
         if (isPlaced) return;
         if (results.length > 0) {
-          stableCount = Math.min(stableCount + 1, STABLE_FRAMES_REQ + 1);
-          lastHitResult = results[0];
-          if (stableCount >= STABLE_FRAMES_REQ) { reticle.isVisible = true; setSurfaceReady(true); }
+          const hit = results[0];
+          const pos = new Vector3();
+          hit.transformationMatrix.decompose(undefined, undefined, pos);
+
+          if (isPositionStable(pos)) {
+            stableCount = Math.min(stableCount + 1, STABLE_FRAMES_REQ + 1);
+          } else {
+            // Surface is still moving / noisy – reset confidence
+            stableCount = 0;
+          }
+          lastHitResult = hit;
+
+          if (stableCount >= STABLE_FRAMES_REQ) {
+            reticle.isVisible = true;
+            setSurfaceReady(true);
+          }
         } else {
-          stableCount = 0; lastHitResult = null;
+          // No plane detected this frame
+          stableCount  = 0;
+          stableBuffer = [];
+          lastHitResult = null;
           reticle.isVisible = false; surfacePlane.isVisible = false;
           setSurfaceReady(false);
         }
