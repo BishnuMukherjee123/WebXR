@@ -71,7 +71,7 @@ export default function ARScene() {
     SceneLoader.ImportMeshAsync("", MODEL_URL, "", scene)
       .then((result) => {
         modelRoot = result.meshes[0];
-        modelRoot.scaling = new Vector3(1.0, 1.0, 1.0);
+        modelRoot.scaling = new Vector3(3.0, 3.0, 3.0);
         modelRoot.setEnabled(false);
         console.log("✅ GLB loaded:", result.meshes.length, "meshes");
       })
