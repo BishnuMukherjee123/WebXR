@@ -31,13 +31,20 @@ export default function ARScene() {
   }, []);
 
   return (
-    // pointer-events: none so taps pass through to the A-Frame canvas below
-    <div style={{ position: "fixed", inset: 0, zIndex: 10, pointerEvents: "none" }}>
-      {/* In-session HUD — buttons, scan hint */}
-      {inSession && <AROverlay surfaceReady={surfaceReady} />}
+    <>
+      {/*
+        In-session HUD — pointer-events:none so taps fall through to A-Frame.
+        AROverlay children set their own pointerEvents:auto for buttons.
+      */}
+      <div style={{ position: "fixed", inset: 0, zIndex: 10, pointerEvents: "none" }}>
+        {inSession && <AROverlay surfaceReady={surfaceReady} />}
+      </div>
 
-      {/* Pre-session landing screen */}
+      {/*
+        Landing screen — OUTSIDE the pointer-events:none div.
+        Must be separate so the Launch AR button receives click events.
+      */}
       {!inSession && <ARLanding />}
-    </div>
+    </>
   );
 }
