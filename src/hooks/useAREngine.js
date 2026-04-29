@@ -14,7 +14,8 @@ import { SceneLoader } from "@babylonjs/core/Loading/sceneLoader";
 const MODEL_URL          = "https://iskchovltfnohyftjckg.supabase.co/storage/v1/object/public/models/10.glb";
 const MODEL_SCALE        = 3.0;
 const SURFACE_FLOAT      = 0.05;
-const RETICLE_LERP       = 0.08;
+const RETICLE_LERP       = 0.22;
+const PLANE_HEIGHT_LERP  = 0.035;
 const STABLE_FRAMES_REQ  = 4;
 const VARIANCE_THRESHOLD = 0.025;
 
@@ -60,17 +61,18 @@ export function useAREngine() {
     let modelRoot     = null;
     let modelYOffset  = 0;
     let placementNode = null;
-    let lastHitResult = null;
     let isPlaced      = false;
     let xrCamera      = null;
     let selectCleanup = null;
     let stableCount   = 0;
     let stableBuffer  = [];
+    let virtualPlaneY = 0;
+    let targetPlaneY  = 0;
+    let planeReady    = false;
 
-    const _lerpPos = new Vector3();
-    const _lerpRot = Quaternion.Identity();
+    const _planeRot = Quaternion.Identity();
 
-    const surfacePlane = MeshBuilder.CreateGround("sp", { width: 1.4, height: 1.4 }, scene);
+    const surfacePlane = MeshBuilder.CreateGround("sp", { width: 100, height: 100 }, scene);
     surfacePlane.isVisible = false;
     surfacePlane.isPickable = false;
     const TEX = 128;
@@ -106,18 +108,32 @@ export function useAREngine() {
     retMat.backFaceCulling = false;
     reticle.material = retMat;
 
+    function getCameraPlanePoint(planeY = virtualPlaneY) {
+      if (!xrCamera) return new Vector3(0, planeY, -1.5);
+      const ray = xrCamera.getForwardRay(8);
+      const origin = ray.origin;
+      const dir = ray.direction;
+      if (Math.abs(dir.y) > 0.015) {
+        const t = (planeY - origin.y) / dir.y;
+        if (t > 0.25 && t < 8.0) return origin.add(dir.scale(t));
+      }
+      const p = origin.add(dir.scale(1.5));
+      p.y = planeY;
+      return p;
+    }
+
     scene.registerBeforeRender(() => {
-      if (isPlaced || !lastHitResult) {
+      if (isPlaced) {
         surfacePlane.isVisible = false;
         return;
       }
-      lastHitResult.transformationMatrix.decompose(undefined, _lerpRot, _lerpPos);
-      Vector3.LerpToRef(reticle.position, _lerpPos, RETICLE_LERP, reticle.position);
-      Quaternion.SlerpToRef(reticle.rotationQuaternion, _lerpRot, RETICLE_LERP, reticle.rotationQuaternion);
-      surfacePlane.position.x = reticle.position.x;
-      surfacePlane.position.y = reticle.position.y - 0.001;
-      surfacePlane.position.z = reticle.position.z;
-      surfacePlane.isVisible  = reticle.isVisible;
+
+      virtualPlaneY += (targetPlaneY - virtualPlaneY) * PLANE_HEIGHT_LERP;
+      const planePoint = getCameraPlanePoint();
+      Vector3.LerpToRef(reticle.position, planePoint, RETICLE_LERP, reticle.position);
+      reticle.rotationQuaternion = _planeRot;
+      reticle.isVisible = Boolean(modelRoot && planeReady);
+      surfacePlane.isVisible = false;
     });
 
     SceneLoader.ImportMeshAsync("", MODEL_URL, "", scene)
@@ -146,26 +162,6 @@ export function useAREngine() {
       modelRoot.scaling            = new Vector3(MODEL_SCALE, MODEL_SCALE, MODEL_SCALE);
     }
 
-    function decomposeHit(hr) {
-      const pos = new Vector3();
-      const rot = new Quaternion();
-      hr.transformationMatrix.decompose(undefined, rot, pos);
-      return { pos, rot, yRot: rot.toEulerAngles().y };
-    }
-
-    function getCameraFloor() {
-      if (!xrCamera) return new Vector3(0, 0, -1.5);
-      const cam = xrCamera.position.clone();
-      const fwd = xrCamera.getForwardRay().direction;
-      if (Math.abs(fwd.y) > 0.01) {
-        const t = -cam.y / fwd.y;
-        if (t > 0.3 && t < 6.0) return cam.add(fwd.scale(t));
-      }
-      const p = cam.add(fwd.scale(1.5));
-      p.y = 0;
-      return p;
-    }
-
     function placeModel(surfacePose) {
       if (!modelRoot) {
         console.warn("Model not loaded yet");
@@ -192,14 +188,9 @@ export function useAREngine() {
 
     function handleSelect() {
       if (isPlaced || !modelRoot) return;
-
-      if (reticle.isVisible || lastHitResult) {
-        const { pos, rot, yRot } = decomposeHit(lastHitResult);
-        placeModel({ pos, rot, yRot });
-      } else {
-        const p = getCameraFloor();
-        placeModel({ pos: p, rot: Quaternion.Identity(), yRot: 0 });
-      }
+      const p = getCameraPlanePoint();
+      p.y = virtualPlaneY;
+      placeModel({ pos: p, rot: Quaternion.Identity(), yRot: 0 });
     }
 
     window.resetAR = () => {
@@ -211,12 +202,14 @@ export function useAREngine() {
       placementNode = null;
       shadowCatcher.isVisible = false;
       isPlaced = false;
-      lastHitResult = null;
       stableCount = 0;
       stableBuffer = [];
+      planeReady = Boolean(xrCamera);
+      targetPlaneY = 0;
+      virtualPlaneY = 0;
       reticle.isVisible = false;
       surfacePlane.isVisible = false;
-      setSurfaceReady(false);
+      setSurfaceReady(planeReady);
     };
 
     scene.createDefaultXRExperienceAsync({
@@ -269,18 +262,15 @@ export function useAREngine() {
           hit.transformationMatrix.decompose(undefined, undefined, pos);
           if (isPositionStable(pos)) stableCount = Math.min(stableCount + 1, STABLE_FRAMES_REQ + 1);
           else stableCount = 0;
-          lastHitResult = hit;
+          targetPlaneY = pos.y;
           if (stableCount >= STABLE_FRAMES_REQ) {
-            reticle.isVisible = true;
+            planeReady = true;
             setSurfaceReady(true);
           }
         } else {
           stableCount = 0;
           stableBuffer = [];
-          lastHitResult = null;
-          reticle.isVisible = false;
           surfacePlane.isVisible = false;
-          setSurfaceReady(false);
         }
       });
 
@@ -288,6 +278,8 @@ export function useAREngine() {
         if (state === WebXRState.IN_XR) {
           setInSession(true);
           xrCamera = xr.baseExperience.camera;
+          planeReady = true;
+          setSurfaceReady(true);
           const session = xr.baseExperience.sessionManager.session;
           const onSel = () => handleSelect();
           session.addEventListener("select", onSel);
