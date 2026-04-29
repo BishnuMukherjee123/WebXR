@@ -1,21 +1,34 @@
-/** Landing screen shown before the AR session starts */
-export default function ARLanding({ xrHelperRef }) {
+import { useEffect, useRef } from "react";
+
+/**
+ * ARLanding
+ *
+ * Pre-session landing screen shown before AR starts.
+ * With A-Frame, the session is launched by calling
+ * scene.enterAR() directly — no xrHelper ref needed.
+ */
+export default function ARLanding() {
+  const btnRef = useRef(null);
+
   function launchAR() {
-    if (xrHelperRef.current) {
-      xrHelperRef.current.baseExperience
-        .enterXRAsync("immersive-ar", "local-floor")
-        .catch(console.error);
-    } else {
-      alert("AR engine loading — please wait a moment.");
+    const scene = document.querySelector("a-scene");
+    if (!scene) {
+      alert("Scene not ready — please wait a moment.");
+      return;
     }
+    // A-Frame 1.6: enterAR() requests an immersive-ar session
+    scene.enterAR().catch((err) => {
+      console.error("AR session failed:", err);
+      alert("Could not start AR. Make sure you are on HTTPS and using Chrome on Android.");
+    });
   }
 
   return (
     <div style={{
-      position: "fixed", inset: 0,
+      position: "fixed", inset: 0, zIndex: 20,
       background: "linear-gradient(135deg, #0f0f0f 0%, #1a1a2e 100%)",
       display: "flex", flexDirection: "column",
-      alignItems: "center", justifyContent: "center", zIndex: 20,
+      alignItems: "center", justifyContent: "center",
     }}>
       <div style={{
         width: 72, height: 72, borderRadius: "50%",
@@ -41,6 +54,7 @@ export default function ARLanding({ xrHelperRef }) {
       </p>
 
       <button
+        ref={btnRef}
         onClick={launchAR}
         style={{
           padding: "15px 40px",
