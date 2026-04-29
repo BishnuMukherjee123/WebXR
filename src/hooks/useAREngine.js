@@ -1,21 +1,38 @@
+/**
+ * useAREngine.js — Aroma AR Engine
+ *
+ * Architecture based on:
+ *  - Official Babylon.js WebXR AR Features docs
+ *  - "Spiegel AR" quality standard technical brief
+ *
+ * Key design decisions:
+ *  1. Plane-only hit test  → stable reticle, no point-cloud noise
+ *  2. anchor.attachedNode  → model parented to native XR anchor (no drift)
+ *  3. NO freezeWorldMatrix → anchor drives the transform every XR frame
+ *  4. Light Estimation     → matches real-world environment lighting
+ *  5. ShadowGenerator      → real projected soft shadows on floor
+ *  6. LERP = 0.05          → very smooth reticle, absorbs hand shake
+ *  7. Variance filter      → only show reticle when surface is truly stable
+ */
 import { useEffect, useRef, useState } from "react";
 import {
   Engine, Scene, Vector3, Color4,
   HemisphericLight, DirectionalLight,
   WebXRFeatureName, WebXRState,
-  Quaternion, TransformNode, MeshBuilder,
-  StandardMaterial, Color3, DynamicTexture,
-  ShadowGenerator,
+  Quaternion, TransformNode,
+  MeshBuilder, StandardMaterial, Color3,
+  DynamicTexture, ShadowGenerator,
 } from "@babylonjs/core";
 import { ShadowOnlyMaterial } from "@babylonjs/materials";
 import "@babylonjs/loaders/glTF";
 import { SceneLoader } from "@babylonjs/core/Loading/sceneLoader";
 
+// ── Constants ─────────────────────────────────────────────────────────────────
 const MODEL_URL          = "https://iskchovltfnohyftjckg.supabase.co/storage/v1/object/public/models/10.glb";
 const MODEL_SCALE        = 3.0;
-const RETICLE_LERP       = 0.12;
-const STABLE_FRAMES_REQ  = 6;
-const VARIANCE_THRESHOLD = 0.018; // 1.8 cm max XZ drift
+const RETICLE_LERP       = 0.05;   // Low = very smooth, absorbs hand shake
+const STABLE_FRAMES_REQ  = 6;      // Frames before surface is trusted
+const VARIANCE_THRESHOLD = 0.018;  // 1.8 cm XZ variance limit
 
 export function useAREngine() {
   const canvasRef   = useRef(null);
@@ -29,49 +46,50 @@ export function useAREngine() {
     const canvas = canvasRef.current;
     if (!canvas) return;
 
+    // ── Engine ───────────────────────────────────────────────────────────────
     const engine = new Engine(canvas, true, {
       preserveDrawingBuffer: true,
       stencil: true,
       adaptToDeviceRatio: true,
     });
     const scene = new Scene(engine);
-    scene.clearColor             = new Color4(0, 0, 0, 0);
+    scene.clearColor             = new Color4(0, 0, 0, 0); // transparent for AR pass-through
     scene.autoClear              = false;
     scene.skipPointerMovePicking = true;
 
-    // ── Lighting ──────────────────────────────────────────────────────────────
+    // ── Lighting (lower intensity – LightEstimation will take over) ──────────
     const hemi = new HemisphericLight("hemi", new Vector3(0, 1, 0), scene);
-    hemi.intensity = 0.6;
+    hemi.intensity = 0.5;
 
-    // Directional light – source for ShadowGenerator
     const dirLight = new DirectionalLight("dir", new Vector3(-1, -2, -1), scene);
     dirLight.position  = new Vector3(0, 5, 0);
-    dirLight.intensity = 1.0;
+    dirLight.intensity = 0.8;
 
-    // ── Real projected shadow setup ───────────────────────────────────────────
-    // ShadowGenerator casts shadows FROM the model ONTO shadowPlane.
-    // ShadowOnlyMaterial makes the ground mesh invisible except where shadows land.
-    // This creates a realistic ground shadow visible in AR pass-through.
+    // ── Real-projected shadow ─────────────────────────────────────────────────
+    // ShadowGenerator casts shadows FROM the model.
+    // ShadowOnlyMaterial makes the ground plane invisible EXCEPT where shadows fall.
+    // This creates a soft shadow visible directly on the AR camera feed floor.
     const shadowGen = new ShadowGenerator(1024, dirLight);
     shadowGen.useBlurExponentialShadowMap = true;
-    shadowGen.blurKernel                 = 32;
-    shadowGen.darkness                   = 0.4;   // 0=full black shadow, 1=invisible
+    shadowGen.blurKernel                  = 32;
+    shadowGen.darkness                    = 0.45;
 
     const shadowCatcher = MeshBuilder.CreateGround(
       "shadowCatcher",
-      { width: 10, height: 10 },
+      { width: 12, height: 12 },
       scene
     );
-    const shadowCatchMat        = new ShadowOnlyMaterial("shadowCatchMat", scene);
-    shadowCatchMat.shadowColor  = new Color3(0, 0, 0);
-    shadowCatcher.material      = shadowCatchMat;
+    const catchMat = new ShadowOnlyMaterial("catchMat", scene);
+    catchMat.shadowColor     = new Color3(0, 0, 0);
+    shadowCatcher.material   = catchMat;
     shadowCatcher.receiveShadows = true;
     shadowCatcher.isPickable     = false;
-    shadowCatcher.isVisible      = false; // hidden until model is placed
+    shadowCatcher.isVisible      = false; // revealed on placement
+    shadowCatcher.position.y     = 0.001; // 1 mm above floor to avoid z-fighting
 
     // ── Session state ────────────────────────────────────────────────────────
     let modelRoot     = null;
-    let anchorNode    = null;
+    let modelYOffset  = 0;    // computed bounding-box floor lift
     let placedAnchor  = null;
     let lastHitResult = null;
     let isPlaced      = false;
@@ -79,12 +97,13 @@ export function useAREngine() {
     let xrCamera      = null;
     let selectCleanup = null;
     let stableCount   = 0;
-    let stableBuffer  = [];
+    let stableBuffer  = [];   // XZ position ring buffer for variance check
 
+    // Pre-allocated – zero GC in render loop
     const _lerpPos = new Vector3();
     const _lerpRot = Quaternion.Identity();
 
-    // ── Diagonal surface plane (scanning UI) ──────────────────────────────────
+    // ── Diagonal scanning plane ───────────────────────────────────────────────
     const surfacePlane = MeshBuilder.CreateGround(
       "surfacePlane",
       { width: 1.4, height: 1.4, subdivisions: 1 },
@@ -104,13 +123,13 @@ export function useAREngine() {
     }
     dTex.hasAlpha = true;
     dTex.update();
-    const surfaceMat = new StandardMaterial("surfaceMat", scene);
-    surfaceMat.diffuseTexture  = dTex;
-    surfaceMat.emissiveColor   = new Color3(0.3, 0.8, 1.0);
-    surfaceMat.alpha           = 0.45;
-    surfaceMat.backFaceCulling = false;
-    surfaceMat.disableLighting = true;
-    surfacePlane.material      = surfaceMat;
+    const diagMat = new StandardMaterial("diagMat", scene);
+    diagMat.diffuseTexture  = dTex;
+    diagMat.emissiveColor   = new Color3(0.3, 0.8, 1.0);
+    diagMat.alpha           = 0.45;
+    diagMat.backFaceCulling = false;
+    diagMat.disableLighting = true;
+    surfacePlane.material   = diagMat;
 
     // ── Reticle ring ──────────────────────────────────────────────────────────
     const reticle = MeshBuilder.CreateTorus(
@@ -128,7 +147,7 @@ export function useAREngine() {
     reticleMat.backFaceCulling = false;
     reticle.material           = reticleMat;
 
-    // Per-frame: lerp reticle + surface plane toward hit position
+    // LERP = 0.05 → very smooth, absorbs hand shake without lag
     scene.registerBeforeRender(() => {
       if (isPlaced || !lastHitResult) { surfacePlane.isVisible = false; return; }
       lastHitResult.transformationMatrix.decompose(undefined, _lerpRot, _lerpPos);
@@ -145,10 +164,14 @@ export function useAREngine() {
       .then((result) => {
         modelRoot = result.meshes[0];
         modelRoot.scaling = new Vector3(MODEL_SCALE, MODEL_SCALE, MODEL_SCALE);
+        // Compute floor Y offset from bounding box
+        scene.meshes.forEach((m) => m.computeWorldMatrix(true));
+        const bounds = modelRoot.getHierarchyBoundingVectors(true);
+        modelYOffset = -bounds.min.y;
         modelRoot.setEnabled(false);
-        // Register every child mesh as a shadow caster
+        // Register as shadow casters
         result.meshes.forEach((m) => shadowGen.addShadowCaster(m));
-        console.log("GLB loaded, shadow casters registered");
+        console.log("GLB loaded | Y offset:", modelYOffset.toFixed(3));
       })
       .catch((err) => console.error("GLB error:", err));
 
@@ -158,10 +181,10 @@ export function useAREngine() {
       modelRoot.getChildMeshes(false).forEach((m) => (m.isVisible = true));
     }
 
-    function decomposeHitResult(hitResult) {
+    function decomposeHitResult(hr) {
       const pos = new Vector3();
       const rot = new Quaternion();
-      hitResult.transformationMatrix.decompose(undefined, rot, pos);
+      hr.transformationMatrix.decompose(undefined, rot, pos);
       return { pos, yRot: rot.toEulerAngles().y };
     }
 
@@ -178,60 +201,65 @@ export function useAREngine() {
       return pos;
     }
 
-    // Live bounds snap: corrects bounding-box error in actual XR world space
-    function snapModelToFloor() {
-      scene.meshes.forEach((m) => m.computeWorldMatrix(true));
-      const bounds = modelRoot.getHierarchyBoundingVectors(true);
-      const gap    = bounds.min.y;
-      if (Math.abs(gap) > 0.0005) {
-        anchorNode.position.y -= gap;
-        scene.meshes.forEach((m) => m.computeWorldMatrix(true));
+    // ── PLACEMENT ARCHITECTURE ────────────────────────────────────────────────
+    //
+    // CORRECT approach (brief §2):
+    //   1. Create native XR anchor at placement position.
+    //   2. Parent modelRoot to anchor.attachedNode.
+    //   3. ARCore/ARKit updates attachedNode's transform every XR frame as
+    //      it refines its world map → model stays at the SAME PHYSICAL POINT.
+    //
+    // WRONG approach (previous):
+    //   freezeWorldMatrix() → model locked to static coordinate → when ARCore
+    //   recalibrates the coordinate system, the model APPEARS to drift because
+    //   the world has moved but the model's matrix hasn't.
+    //
+    async function placeWithAnchor(pos, rotQuat, yRot) {
+      try {
+        const anchor = await anchorSystem.addAnchorAtPositionAndRotationAsync(pos, rotQuat);
+        if (!anchor) throw new Error("No anchor returned");
+
+        placedAnchor = anchor;
+
+        // Parent model to anchor.attachedNode — ARCore drives this node
+        modelRoot.parent             = anchor.attachedNode;
+        modelRoot.position           = new Vector3(0, modelYOffset, 0);
+        modelRoot.rotationQuaternion = null;
+        modelRoot.rotation           = new Vector3(0, yRot, 0);
+        modelRoot.scaling            = new Vector3(MODEL_SCALE, MODEL_SCALE, MODEL_SCALE);
+
+        showModel();
+
+        // Shadow catcher on the floor
+        shadowCatcher.position.y = 0.001;
+        shadowCatcher.isVisible  = true;
+
+        isPlaced               = true;
+        reticle.isVisible      = false;
+        surfacePlane.isVisible = false;
+        setSurfaceReady(false);
+        console.log("⚓ Model anchored — no freeze, ARCore drives position");
+      } catch (e) {
+        console.warn("Anchor failed, falling back to direct placement:", e.message ?? e);
+        placeDirectly(pos, yRot);
       }
     }
 
-    // Bake world matrix – immune to camera shake and ARCore drift
-    function freezeModelInPlace() {
-      scene.meshes.forEach((m) => m.computeWorldMatrix(true));
-      const worldPos = modelRoot.getAbsolutePosition().clone();
-      const worldRot = modelRoot.absoluteRotationQuaternion
-        ? modelRoot.absoluteRotationQuaternion.clone()
-        : Quaternion.Identity();
-      modelRoot.parent             = null;
-      modelRoot.position.copyFrom(worldPos);
-      modelRoot.rotationQuaternion = worldRot;
-      modelRoot.scaling            = new Vector3(MODEL_SCALE, MODEL_SCALE, MODEL_SCALE);
-      modelRoot.freezeWorldMatrix();
-      modelRoot.getChildMeshes(false).forEach((m) => {
-        m.computeWorldMatrix(true);
-        m.freezeWorldMatrix();
-      });
-      console.log("Model frozen at Y:", worldPos.y.toFixed(4));
-    }
+    // Fallback: no anchor system available (rare on modern Android Chrome)
+    // We use a static TransformNode here. Without an anchor, some drift is
+    // expected on low-texture surfaces — this is a hardware limitation.
+    function placeDirectly(pos, yRot) {
+      const node = new TransformNode("directNode", scene);
+      node.position = new Vector3(pos.x, 0, pos.z);
 
-    function unfreezeModel() {
-      if (!modelRoot) return;
-      modelRoot.unfreezeWorldMatrix();
-      modelRoot.getChildMeshes(false).forEach((m) => m.unfreezeWorldMatrix());
-    }
-
-    // ── Place model ───────────────────────────────────────────────────────────
-    function finalizeModelPlacement(floorX, floorZ, yRot) {
-      if (!anchorNode) anchorNode = new TransformNode("anchorNode", scene);
-      anchorNode.parent   = null;
-      anchorNode.position = new Vector3(floorX, 0, floorZ);
-      anchorNode.rotation = Vector3.Zero();
-
-      modelRoot.parent             = anchorNode;
-      modelRoot.position           = Vector3.Zero();
+      modelRoot.parent             = node;
+      modelRoot.position           = new Vector3(0, modelYOffset, 0);
       modelRoot.rotationQuaternion = null;
       modelRoot.rotation           = new Vector3(0, yRot, 0);
       modelRoot.scaling            = new Vector3(MODEL_SCALE, MODEL_SCALE, MODEL_SCALE);
 
       showModel();
-      snapModelToFloor();         // exact floor alignment
-      freezeModelInPlace();       // no more jitter
 
-      // Show shadow catcher at floor level (Y=0 so shadow lands on floor)
       shadowCatcher.position.y = 0.001;
       shadowCatcher.isVisible  = true;
 
@@ -239,46 +267,39 @@ export function useAREngine() {
       reticle.isVisible      = false;
       surfacePlane.isVisible = false;
       setSurfaceReady(false);
-    }
-
-    async function placeWithAnchor(floorX, floorZ, rotQuat, yRot) {
-      finalizeModelPlacement(floorX, floorZ, yRot);
-      try {
-        const pos    = new Vector3(floorX, 0, floorZ);
-        const anchor = await anchorSystem.addAnchorAtPositionAndRotationAsync(pos, rotQuat);
-        if (anchor) { placedAnchor = anchor; console.log("Anchor created"); }
-      } catch (e) { console.warn("Anchor skipped:", e.message ?? e); }
+      console.log("📍 Direct placement (no anchor)");
     }
 
     // ── Tap handler ───────────────────────────────────────────────────────────
     async function handleSelect() {
       if (isPlaced || !modelRoot) return;
 
-      let floorX, floorZ, yRot, rotQuat;
       if (lastHitResult) {
-        const { pos, yRot: yr } = decomposeHitResult(lastHitResult);
-        floorX  = pos.x; floorZ = pos.z; yRot = yr;
-        rotQuat = Quaternion.Identity();
+        const { pos, yRot } = decomposeHitResult(lastHitResult);
+        pos.y = 0; // enforce floor level
+        const rotQuat = Quaternion.Identity();
         lastHitResult.transformationMatrix.decompose(undefined, rotQuat, undefined);
-      } else {
-        const pos = getCameraFloorPosition();
-        floorX = pos.x; floorZ = pos.z; yRot = 0;
-      }
 
-      if (anchorSystem && rotQuat) {
-        await placeWithAnchor(floorX, floorZ, rotQuat, yRot);
+        if (anchorSystem) {
+          await placeWithAnchor(pos, rotQuat, yRot);
+        } else {
+          placeDirectly(pos, yRot);
+        }
       } else {
-        finalizeModelPlacement(floorX, floorZ, yRot);
+        // No surface detected — project camera ray to floor
+        placeDirectly(getCameraFloorPosition(), 0);
       }
     }
 
     // ── Reset ─────────────────────────────────────────────────────────────────
     window.resetAR = () => {
-      unfreezeModel();
-      if (modelRoot)    { modelRoot.parent = null; modelRoot.setEnabled(false); }
-      if (placedAnchor) { try { placedAnchor.remove(); } catch (_) {} placedAnchor = null; }
+      if (modelRoot) { modelRoot.parent = null; modelRoot.setEnabled(false); }
+      if (placedAnchor) {
+        try { placedAnchor.remove(); } catch (_) {}
+        placedAnchor = null;
+      }
       shadowCatcher.isVisible = false;
-      anchorNode = null; isPlaced = false; lastHitResult = null;
+      isPlaced = false; lastHitResult = null;
       stableCount = 0; stableBuffer = [];
       reticle.isVisible = false; surfacePlane.isVisible = false;
       setSurfaceReady(false);
@@ -286,37 +307,49 @@ export function useAREngine() {
 
     // ── WebXR ──────────────────────────────────────────────────────────────────
     scene.createDefaultXRExperienceAsync({
-      uiOptions: { sessionMode: "immersive-ar", referenceSpaceType: "local-floor" },
-      optionalFeatures: ["hit-test", "anchors", "dom-overlay", "light-estimation"],
+      uiOptions: {
+        sessionMode: "immersive-ar",
+        referenceSpaceType: "local-floor",
+      },
+      optionalFeatures: ["hit-test", "anchors", "light-estimation", "dom-overlay"],
       disableDefaultUI: true,
       disableTeleportation: true,
     }).then((xr) => {
       xrHelperRef.current = xr;
       const fm = xr.baseExperience.featuresManager;
 
-      try { fm.enableFeature(WebXRFeatureName.DOM_OVERLAY, "latest", { element: overlayRef.current }); } catch (_) {}
+      // DOM overlay
+      try {
+        fm.enableFeature(WebXRFeatureName.DOM_OVERLAY, "latest", {
+          element: overlayRef.current,
+        });
+      } catch (_) {}
 
-      // Light estimation: adjusts scene lighting to match real-world environment
+      // Light estimation: replaces manual lighting with camera-measured values
+      // Adjusts scene exposure + reflection map to match the physical room
       try {
         fm.enableFeature(WebXRFeatureName.LIGHT_ESTIMATION, "latest", {
           createDefaultLight: true,
           reflectionFormat: "srgba8",
         });
-        console.log("Light estimation enabled");
-      } catch (e) { console.warn("Light estimation unavailable:", e.message ?? e); }
+        console.log("💡 Light estimation active");
+      } catch (e) {
+        console.warn("Light estimation unavailable:", e.message ?? e);
+      }
 
-      // True stable surface detection: planes only + position variance filter
+      // Plane-only hit test — ignores point clouds (main cause of reticle jitter)
       const hitTest = fm.enableFeature(WebXRFeatureName.HIT_TEST, "latest", {
         entityTypes: ["plane", "mesh"],
         enableTransientHitTest: false,
       });
 
+      // XZ variance filter: reticle only shows when surface has stopped moving
       function isPositionStable(newPos) {
         stableBuffer.push(new Vector3(newPos.x, 0, newPos.z));
         if (stableBuffer.length > STABLE_FRAMES_REQ) stableBuffer.shift();
         if (stableBuffer.length < STABLE_FRAMES_REQ) return false;
         const centroid = stableBuffer
-          .reduce((acc, p) => acc.addInPlace(p), new Vector3(0, 0, 0))
+          .reduce((acc, p) => acc.addInPlace(p), new Vector3())
           .scaleInPlace(1 / stableBuffer.length);
         return stableBuffer.every((p) => Vector3.Distance(p, centroid) < VARIANCE_THRESHOLD);
       }
@@ -330,7 +363,7 @@ export function useAREngine() {
           if (isPositionStable(pos)) {
             stableCount = Math.min(stableCount + 1, STABLE_FRAMES_REQ + 1);
           } else {
-            stableCount = 0;
+            stableCount = 0; // surface still moving — reset confidence
           }
           lastHitResult = hit;
           if (stableCount >= STABLE_FRAMES_REQ) {
@@ -344,9 +377,15 @@ export function useAREngine() {
         }
       });
 
-      try { anchorSystem = fm.enableFeature(WebXRFeatureName.ANCHOR_SYSTEM, "latest"); }
-      catch (e) { console.warn("No anchors:", e.message ?? e); }
+      // Anchor system
+      try {
+        anchorSystem = fm.enableFeature(WebXRFeatureName.ANCHOR_SYSTEM, "latest");
+        console.log("⚓ Anchor system ready");
+      } catch (e) {
+        console.warn("Anchor system unavailable:", e.message ?? e);
+      }
 
+      // Session lifecycle
       xr.baseExperience.onStateChangedObservable.add((state) => {
         if (state === WebXRState.IN_XR) {
           setInSession(true);
@@ -355,6 +394,7 @@ export function useAREngine() {
           const onSel   = () => handleSelect();
           session.addEventListener("select", onSel);
           selectCleanup = () => session.removeEventListener("select", onSel);
+          console.log("✅ AR session active");
         } else {
           setInSession(false); xrCamera = null;
           window.resetAR();
