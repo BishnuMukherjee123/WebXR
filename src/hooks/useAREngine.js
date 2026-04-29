@@ -23,7 +23,7 @@ const MODEL_URL =
 // ─── Tuning ───────────────────────────────────────────────────────────────────
 const MODEL_SCALE         = 3.0;   // world-space metres
 const RETICLE_LERP        = 0.12;  // smoothing factor per frame (0=frozen, 1=instant)
-const STABLE_FRAMES_REQ   = 8;     // consecutive hit results required before showing reticle
+const STABLE_FRAMES_REQ   = 4;     // consecutive hit results required before showing reticle
 const MIN_PLACE_DIST      = 0.45;  // metres – reject hit-tests closer than this (ARCore unstable zone)
 
 /**
@@ -152,36 +152,35 @@ export function useAREngine() {
       return Vector3.Distance(xrCamera.position, pos) < MIN_PLACE_DIST;
     }
 
-    // ── Anchor placement (docs + forum pattern) ───────────────────────────────
-    // Pattern from Part 7 + RaananW confirmation:
-    //   addAnchorAtPositionAndRotationAsync(pos, rot)
-    //     .then(anchor => { anchor.attachedNode = transformNode })
+    // ── Anchor placement ─────────────────────────────────────────────────────
+    // Key insight: show model & lock state IMMEDIATELY on tap.
+    // Anchor creation is async (1-2 XR frames) – run it in the background.
+    // This eliminates all perceived delay between tap and model appearing.
     async function placeWithAnchor(pos, rotQuat, yRot) {
-      // anchorNode acts as the stable world-locked parent
+      // ── INSTANT (synchronous) ───────────────────────────────────────────
+      isPlaced = true;                  // prevent any re-entry
+      reticle.isVisible = false;        // hide ring immediately
+      setSurfaceReady(false);
+
       if (!anchorNode) anchorNode = new TransformNode("anchorNode", scene);
       anchorNode.position.copyFrom(pos);
-
-      // Parent model under anchor node BEFORE async call
       modelRoot.parent = anchorNode;
       applyModelPose(yRot);
-      showModel();
+      showModel();                      // model visible THIS frame
 
+      // ── BACKGROUND (async) ──────────────────────────────────────────────
+      // Creates the native XR anchor; Babylon then drives anchorNode every
+      // XR frame so it stays world-locked even as ARCore refines its map.
       try {
         const anchor = await anchorSystem.addAnchorAtPositionAndRotationAsync(pos, rotQuat);
         if (anchor) {
           placedAnchor = anchor;
-          // Babylon updates anchorNode's transform every XR frame from the native anchor
           anchor.attachedNode = anchorNode;
-          console.log("⚓ Anchor attached – world-locked");
+          console.log("⚓ Anchor world-locked");
         }
       } catch (e) {
-        console.warn("⚠️ Anchor creation failed (device may not support it):", e.message ?? e);
-        // Model already shown – just stays at direct position without world-lock
+        console.warn("⚠️ Anchor skipped (unsupported):", e.message ?? e);
       }
-
-      isPlaced = true;
-      reticle.isVisible = false;
-      setSurfaceReady(false);
     }
 
     // ── Direct fallback (no anchor system) ────────────────────────────────────
