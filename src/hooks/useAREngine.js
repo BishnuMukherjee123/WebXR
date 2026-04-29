@@ -20,23 +20,10 @@ import { SceneLoader } from "@babylonjs/core/Loading/sceneLoader";
 const MODEL_URL =
   "https://iskchovltfnohyftjckg.supabase.co/storage/v1/object/public/models/10.glb";
 
-// ─── Tuning ───────────────────────────────────────────────────────────────────
-const MODEL_SCALE         = 3.0;   // world-space metres
-const RETICLE_LERP        = 0.12;  // smoothing factor per frame (0=frozen, 1=instant)
-const STABLE_FRAMES_REQ   = 4;     // consecutive hit results required before showing reticle
-const MIN_PLACE_DIST      = 0.45;  // metres – reject hit-tests closer than this (ARCore unstable zone)
+const MODEL_SCALE       = 3.0;
+const RETICLE_LERP      = 0.12;
+const STABLE_FRAMES_REQ = 4;
 
-/**
- * useAREngine – all Babylon.js + WebXR logic.
- *
- * Research basis:
- *  • Babylon.js official AR docs (hit-test, anchor system, reference spaces)
- *  • Taikonauten WebXR/Babylon.js series (Parts 4 & 7) – real-world patterns
- *  • Babylon.js forum: RaananW + docEdub confirm:
- *      - <30–40 cm hits are inherently unstable (ARCore hardware limit)
- *      - Use addAnchorAtPositionAndRotationAsync().then(a => a.attachedNode = node)
- *      - XRAnchor available on all AR-enabled Android Chrome/Edge without flags
- */
 export function useAREngine() {
   const canvasRef   = useRef(null);
   const overlayRef  = useRef(null);
@@ -49,40 +36,37 @@ export function useAREngine() {
     const canvas = canvasRef.current;
     if (!canvas) return;
 
-    // ── Engine ──────────────────────────────────────────────────────────────
     const engine = new Engine(canvas, true, {
       preserveDrawingBuffer: true,
       stencil: true,
       adaptToDeviceRatio: true,
     });
     const scene = new Scene(engine);
-    scene.clearColor       = new Color4(0, 0, 0, 0);
-    scene.autoClear        = false;              // AR pass-through: don't overdraw
-    scene.skipPointerMovePicking = true;         // no mesh picking on every pointer move
+    scene.clearColor           = new Color4(0, 0, 0, 0);
+    scene.autoClear            = false;
+    scene.skipPointerMovePicking = true;
 
-    // Lighting
     const hemi = new HemisphericLight("hemi", new Vector3(0, 1, 0), scene);
     hemi.intensity = 1.3;
     const dir = new DirectionalLight("dir", new Vector3(-1, -2, -1), scene);
     dir.intensity = 0.8;
 
-    // ── Mutable session state (never stored in React state – avoids re-renders) ──
-    let modelRoot     = null;   // GLTF AbstractMesh root
-    let modelYOffset  = 0;      // computed floor-lift
-    let anchorNode    = null;   // TransformNode the anchor drives
-    let placedAnchor  = null;   // IWebXRAnchor keeping model world-locked
-    let lastHitResult = null;   // most recent IWebXRHitTestResult
+    let modelRoot    = null;
+    let modelYOffset = 0;
+    let anchorNode   = null;
+    let placedAnchor = null;
+    let lastHitResult = null;
     let isPlaced      = false;
     let anchorSystem  = null;
     let xrCamera      = null;
     let selectCleanup = null;
-    let stableCount   = 0;      // consecutive valid hit frames
+    let stableCount   = 0;
 
-    // Pre-allocated temporaries – ZERO allocations inside render loop
+    // Pre-allocated – zero GC in render loop
     const _lerpPos = new Vector3();
     const _lerpRot = Quaternion.Identity();
 
-    // ── Reticle ─────────────────────────────────────────────────────────────
+    // ── Reticle ──────────────────────────────────────────────────────────────
     const reticle = MeshBuilder.CreateTorus(
       "reticle",
       { diameter: 0.5, thickness: 0.018, tessellation: 48 },
@@ -90,7 +74,6 @@ export function useAREngine() {
     );
     reticle.rotationQuaternion = Quaternion.Identity();
     reticle.isVisible = false;
-
     const reticleMat = new StandardMaterial("reticleMat", scene);
     reticleMat.emissiveColor   = new Color3(1, 1, 1);
     reticleMat.disableLighting = true;
@@ -98,45 +81,38 @@ export function useAREngine() {
     reticleMat.backFaceCulling = false;
     reticle.material           = reticleMat;
 
-    // Smooth reticle each frame using pre-allocated vectors (no GC)
     scene.registerBeforeRender(() => {
       if (isPlaced || !lastHitResult) return;
       lastHitResult.transformationMatrix.decompose(undefined, _lerpRot, _lerpPos);
-      Vector3.LerpToRef(reticle.position,          _lerpPos, RETICLE_LERP, reticle.position);
+      Vector3.LerpToRef(reticle.position, _lerpPos, RETICLE_LERP, reticle.position);
       Quaternion.SlerpToRef(reticle.rotationQuaternion, _lerpRot, RETICLE_LERP, reticle.rotationQuaternion);
     });
 
-    // ── GLB load ─────────────────────────────────────────────────────────────
+    // ── Load GLB ─────────────────────────────────────────────────────────────
     SceneLoader.ImportMeshAsync("", MODEL_URL, "", scene)
       .then((result) => {
         modelRoot = result.meshes[0];
         modelRoot.scaling = new Vector3(MODEL_SCALE, MODEL_SCALE, MODEL_SCALE);
-
-        // Force world-matrix computation to get accurate bounding box
         scene.meshes.forEach((m) => m.computeWorldMatrix(true));
         const bounds = modelRoot.getHierarchyBoundingVectors(true);
-        modelYOffset = -bounds.min.y;   // lift base to floor (Y=0)
-
+        modelYOffset = -bounds.min.y;
         modelRoot.setEnabled(false);
         console.log("✅ GLB ready | floorOffset =", modelYOffset.toFixed(3));
       })
       .catch((err) => console.error("❌ GLB error:", err));
 
     // ── Helpers ───────────────────────────────────────────────────────────────
-
     function showModel() {
       modelRoot.setEnabled(true);
       modelRoot.getChildMeshes(false).forEach((m) => (m.isVisible = true));
     }
 
-    // Floor-aligned pose per spec: rotation.x=0, rotation.z=0
     function applyModelPose(yRotation) {
       modelRoot.position           = new Vector3(0, modelYOffset, 0);
       modelRoot.rotationQuaternion = null;
       modelRoot.rotation           = new Vector3(0, yRotation, 0);
     }
 
-    // Extract world position + Y rotation from hit-test matrix
     function decomposeHitResult(hitResult) {
       const pos = new Vector3();
       const rot = new Quaternion();
@@ -144,33 +120,36 @@ export function useAREngine() {
       return { pos, yRot: rot.toEulerAngles().y };
     }
 
-    // ── Distance guard ────────────────────────────────────────────────────────
-    // Forum confirmed: hits <30-40cm from camera are in ARCore's unstable zone.
-    // Reject them to prevent "wandering" anchors.
-    function isTooCloseToCamera(pos) {
-      if (!xrCamera) return false;
-      return Vector3.Distance(xrCamera.position, pos) < MIN_PLACE_DIST;
+    // Projects camera forward ray onto Y=0 floor plane.
+    // Used when ARCore hasn't detected a surface yet (dark/featureless floors).
+    function getCameraFloorPosition() {
+      if (!xrCamera) return new Vector3(0, 0, -1.5);
+      const camPos  = xrCamera.position.clone();
+      const forward = xrCamera.getForwardRay().direction;
+      if (Math.abs(forward.y) > 0.01) {
+        const t = -camPos.y / forward.y;
+        if (t > 0.3 && t < 6.0) return camPos.add(forward.scale(t));
+      }
+      // Camera near-horizontal – place 1.5m ahead at floor level
+      const pos = camPos.add(forward.scale(1.5));
+      pos.y = 0;
+      return pos;
     }
 
-    // ── Anchor placement ─────────────────────────────────────────────────────
-    // Key insight: show model & lock state IMMEDIATELY on tap.
-    // Anchor creation is async (1-2 XR frames) – run it in the background.
-    // This eliminates all perceived delay between tap and model appearing.
+    // ── Anchor placement (instant model, background anchor) ───────────────────
     async function placeWithAnchor(pos, rotQuat, yRot) {
-      // ── INSTANT (synchronous) ───────────────────────────────────────────
-      isPlaced = true;                  // prevent any re-entry
-      reticle.isVisible = false;        // hide ring immediately
+      // INSTANT: lock state and show model this frame
+      isPlaced = true;
+      reticle.isVisible = false;
       setSurfaceReady(false);
 
       if (!anchorNode) anchorNode = new TransformNode("anchorNode", scene);
       anchorNode.position.copyFrom(pos);
       modelRoot.parent = anchorNode;
       applyModelPose(yRot);
-      showModel();                      // model visible THIS frame
+      showModel();
 
-      // ── BACKGROUND (async) ──────────────────────────────────────────────
-      // Creates the native XR anchor; Babylon then drives anchorNode every
-      // XR frame so it stays world-locked even as ARCore refines its map.
+      // BACKGROUND: native anchor for world-locking (doesn't block model)
       try {
         const anchor = await anchorSystem.addAnchorAtPositionAndRotationAsync(pos, rotQuat);
         if (anchor) {
@@ -179,11 +158,11 @@ export function useAREngine() {
           console.log("⚓ Anchor world-locked");
         }
       } catch (e) {
-        console.warn("⚠️ Anchor skipped (unsupported):", e.message ?? e);
+        console.warn("⚠️ Anchor skipped:", e.message ?? e);
       }
     }
 
-    // ── Direct fallback (no anchor system) ────────────────────────────────────
+    // ── Direct placement (no anchor system, or fallback path) ─────────────────
     function placeDirectly(pos, yRot) {
       if (!anchorNode) anchorNode = new TransformNode("anchorNode", scene);
       anchorNode.parent = null;
@@ -197,28 +176,31 @@ export function useAREngine() {
       isPlaced = true;
       reticle.isVisible = false;
       setSurfaceReady(false);
-      console.log("📍 Direct placement (anchor system unavailable)");
+      console.log("📍 Direct placement");
     }
 
     // ── Tap handler ───────────────────────────────────────────────────────────
+    // ALWAYS places on tap – never silently ignores the user:
+    //   Path A: hit-test result available → exact ARCore surface + anchor
+    //   Path B: no surface detected yet   → camera-ray projected to Y=0 floor
     async function handleSelect() {
-      if (isPlaced || !modelRoot || !lastHitResult) return;
+      if (isPlaced || !modelRoot) return;
 
-      const { pos, yRot } = decomposeHitResult(lastHitResult);
-
-      // Reject unstable close-range hits (ARCore <30-40cm zone)
-      if (isTooCloseToCamera(pos)) {
-        console.warn("⚠️ Hit too close to camera, ignoring");
-        return;
-      }
-
-      const rot = Quaternion.Identity();
-      lastHitResult.transformationMatrix.decompose(undefined, rot, undefined);
-
-      if (anchorSystem) {
-        await placeWithAnchor(pos, rot, yRot);
+      if (lastHitResult) {
+        // Path A – accurate ARCore surface
+        const { pos, yRot } = decomposeHitResult(lastHitResult);
+        const rot = Quaternion.Identity();
+        lastHitResult.transformationMatrix.decompose(undefined, rot, undefined);
+        if (anchorSystem) {
+          await placeWithAnchor(pos, rot, yRot);
+        } else {
+          placeDirectly(pos, yRot);
+        }
       } else {
-        placeDirectly(pos, yRot);
+        // Path B – dark/featureless floor, no ARCore hit yet
+        const pos = getCameraFloorPosition();
+        console.log("📷 Camera-floor fallback at", pos.toString());
+        placeDirectly(pos, 0);
       }
     }
 
@@ -234,13 +216,12 @@ export function useAREngine() {
       setSurfaceReady(false);
     };
 
-    // ── WebXR setup ────────────────────────────────────────────────────────────
+    // ── WebXR ──────────────────────────────────────────────────────────────────
     scene.createDefaultXRExperienceAsync({
       uiOptions: {
         sessionMode: "immersive-ar",
-        referenceSpaceType: "local-floor",  // Y=0 = detected floor level
+        referenceSpaceType: "local-floor",
       },
-      // Explicit feature list is more reliable than optionalFeatures: true
       optionalFeatures: ["hit-test", "anchors", "dom-overlay"],
       disableDefaultUI: true,
       disableTeleportation: true,
@@ -248,31 +229,23 @@ export function useAREngine() {
       xrHelperRef.current = xr;
       const fm = xr.baseExperience.featuresManager;
 
-      // DOM overlay (optional – AR-specific UI layer)
       try {
         fm.enableFeature(WebXRFeatureName.DOM_OVERLAY, "latest", {
           element: overlayRef.current,
         });
       } catch (_) {}
 
-      // ── Hit-test ─────────────────────────────────────────────────────────
-      // Babylon creates the XRHitTestSource once internally and reuses it.
       const hitTest = fm.enableFeature(WebXRFeatureName.HIT_TEST, "latest");
-
       hitTest.onHitTestResultObservable.add((results) => {
         if (isPlaced) return;
-
         if (results.length > 0) {
-          // Stability filter: require STABLE_FRAMES_REQ consecutive frames
           stableCount = Math.min(stableCount + 1, STABLE_FRAMES_REQ + 1);
           lastHitResult = results[0];
-
           if (stableCount >= STABLE_FRAMES_REQ) {
             reticle.isVisible = true;
             setSurfaceReady(true);
           }
         } else {
-          // Surface lost – reset counter fully so we re-validate stability
           stableCount   = 0;
           lastHitResult = null;
           reticle.isVisible = false;
@@ -280,8 +253,6 @@ export function useAREngine() {
         }
       });
 
-      // ── Anchor system ─────────────────────────────────────────────────────
-      // Available on all AR-enabled Android Chrome without flags (confirmed: RaananW)
       try {
         anchorSystem = fm.enableFeature(WebXRFeatureName.ANCHOR_SYSTEM, "latest");
         console.log("⚓ AnchorSystem ready");
@@ -289,13 +260,10 @@ export function useAREngine() {
         console.warn("⚠️ AnchorSystem unavailable:", e.message ?? e);
       }
 
-      // ── Session lifecycle ─────────────────────────────────────────────────
       xr.baseExperience.onStateChangedObservable.add((state) => {
         if (state === WebXRState.IN_XR) {
           setInSession(true);
           xrCamera = xr.baseExperience.camera;
-
-          // Native 'select' event – the only reliable tap source in immersive-ar
           const session  = xr.baseExperience.sessionManager.session;
           const onSelect = () => handleSelect();
           session.addEventListener("select", onSelect);
@@ -310,7 +278,6 @@ export function useAREngine() {
       });
     }).catch((err) => console.error("❌ XR init error:", err));
 
-    // ── Render loop ────────────────────────────────────────────────────────────
     engine.runRenderLoop(() => scene.render());
     const onResize = () => engine.resize();
     window.addEventListener("resize", onResize);
