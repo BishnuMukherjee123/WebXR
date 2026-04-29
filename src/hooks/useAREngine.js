@@ -14,10 +14,14 @@ import { SceneLoader } from "@babylonjs/core/Loading/sceneLoader";
 const MODEL_URL          = "https://iskchovltfnohyftjckg.supabase.co/storage/v1/object/public/models/10.glb";
 const MODEL_SCALE        = 3.0;
 const SURFACE_FLOAT      = 0.05;
-const RETICLE_LERP       = 0.22;
-const PLANE_HEIGHT_LERP  = 0.035;
-const STABLE_FRAMES_REQ  = 4;
-const VARIANCE_THRESHOLD = 0.025;
+const SURFACE_POSE_LERP  = 0.18;
+const MAPPED_PLANE_SIZE  = 3.8;
+const MAPPED_PLANE_MAX_SCALE = 3.2;
+const MAPPED_PLANE_SPREAD_MARGIN = 0.75;
+const MAPPED_PLANE_SPREAD_LERP = 0.12;
+const RING_DIAMETER      = 1.35;
+const STABLE_FRAMES_REQ  = 2;
+const VARIANCE_THRESHOLD = 0.08;
 
 export function useAREngine() {
   const canvasRef   = useRef(null);
@@ -66,13 +70,20 @@ export function useAREngine() {
     let selectCleanup = null;
     let stableCount   = 0;
     let stableBuffer  = [];
-    let virtualPlaneY = 0;
-    let targetPlaneY  = 0;
     let planeReady    = false;
+    let hasPlanePose  = false;
+    let hasMappedPose = false;
+    let mappedPlaneScale = 1;
+    let targetMappedPlaneScale = 1;
 
-    const _planeRot = Quaternion.Identity();
+    const _targetPlanePos = new Vector3();
+    const _targetPlaneRot = Quaternion.Identity();
+    const _mappedPlanePos = new Vector3();
+    const _mappedPlaneRot = Quaternion.Identity();
+    const _planeNormal = new Vector3(0, 1, 0);
+    const _inverseSurface = new Vector3();
 
-    const surfacePlane = MeshBuilder.CreateGround("sp", { width: 100, height: 100 }, scene);
+    const surfacePlane = MeshBuilder.CreateGround("sp", { width: MAPPED_PLANE_SIZE, height: MAPPED_PLANE_SIZE }, scene);
     surfacePlane.isVisible = false;
     surfacePlane.isPickable = false;
     const TEX = 128;
@@ -92,12 +103,12 @@ export function useAREngine() {
     const diagMat = new StandardMaterial("dm", scene);
     diagMat.diffuseTexture = dTex;
     diagMat.emissiveColor = new Color3(0.3, 0.8, 1.0);
-    diagMat.alpha = 0.45;
+    diagMat.alpha = 0.55;
     diagMat.backFaceCulling = false;
     diagMat.disableLighting = true;
     surfacePlane.material = diagMat;
 
-    const reticle = MeshBuilder.CreateTorus("ret", { diameter: 0.55, thickness: 0.016, tessellation: 48 }, scene);
+    const reticle = MeshBuilder.CreateTorus("ret", { diameter: RING_DIAMETER, thickness: 0.035, tessellation: 96 }, scene);
     reticle.rotationQuaternion = Quaternion.Identity();
     reticle.isVisible = false;
     reticle.isPickable = false;
@@ -108,18 +119,35 @@ export function useAREngine() {
     retMat.backFaceCulling = false;
     reticle.material = retMat;
 
-    function getCameraPlanePoint(planeY = virtualPlaneY) {
-      if (!xrCamera) return new Vector3(0, planeY, -1.5);
+    function getCameraPointOnSurface() {
+      if (!xrCamera || !hasMappedPose) return new Vector3(0, 0, -1.5);
       const ray = xrCamera.getForwardRay(8);
       const origin = ray.origin;
       const dir = ray.direction;
-      if (Math.abs(dir.y) > 0.015) {
-        const t = (planeY - origin.y) / dir.y;
-        if (t > 0.25 && t < 8.0) return origin.add(dir.scale(t));
+      Vector3.TransformNormalToRef(Vector3.Up(), surfacePlane.getWorldMatrix(), _planeNormal);
+      _planeNormal.normalize();
+
+      const denom = Vector3.Dot(dir, _planeNormal);
+      if (Math.abs(denom) > 0.015) {
+        const t = Vector3.Dot(surfacePlane.position.subtract(origin), _planeNormal) / denom;
+        if (t > 0.2 && t < 8.0) return origin.add(dir.scale(t));
       }
+
       const p = origin.add(dir.scale(1.5));
-      p.y = planeY;
+      const dist = Vector3.Dot(p.subtract(surfacePlane.position), _planeNormal);
+      p.subtractInPlace(_planeNormal.scale(dist));
       return p;
+    }
+
+    function spreadMappedPlaneTo(point) {
+      if (!hasMappedPose) return;
+      Vector3.TransformCoordinatesToRef(point, surfacePlane.getWorldMatrix().clone().invert(), _inverseSurface);
+      const neededHalfSize = Math.max(Math.abs(_inverseSurface.x), Math.abs(_inverseSurface.z)) + MAPPED_PLANE_SPREAD_MARGIN;
+      const neededScale = Math.min(
+        MAPPED_PLANE_MAX_SCALE,
+        Math.max(1, (neededHalfSize * 2) / MAPPED_PLANE_SIZE),
+      );
+      targetMappedPlaneScale = Math.max(targetMappedPlaneScale, neededScale);
     }
 
     scene.registerBeforeRender(() => {
@@ -128,12 +156,16 @@ export function useAREngine() {
         return;
       }
 
-      virtualPlaneY += (targetPlaneY - virtualPlaneY) * PLANE_HEIGHT_LERP;
-      const planePoint = getCameraPlanePoint();
-      Vector3.LerpToRef(reticle.position, planePoint, RETICLE_LERP, reticle.position);
-      reticle.rotationQuaternion = _planeRot;
-      reticle.isVisible = Boolean(modelRoot && planeReady);
-      surfacePlane.isVisible = false;
+      Vector3.LerpToRef(surfacePlane.position, _mappedPlanePos, SURFACE_POSE_LERP, surfacePlane.position);
+      Quaternion.SlerpToRef(surfacePlane.rotationQuaternion, _mappedPlaneRot, SURFACE_POSE_LERP, surfacePlane.rotationQuaternion);
+      const tapPoint = getCameraPointOnSurface();
+      spreadMappedPlaneTo(tapPoint);
+      mappedPlaneScale += (targetMappedPlaneScale - mappedPlaneScale) * MAPPED_PLANE_SPREAD_LERP;
+      surfacePlane.scaling.set(mappedPlaneScale, 1, mappedPlaneScale);
+      reticle.position.copyFrom(tapPoint);
+      reticle.rotationQuaternion?.copyFrom(surfacePlane.rotationQuaternion);
+      reticle.isVisible = Boolean(modelRoot && planeReady && hasMappedPose);
+      surfacePlane.isVisible = Boolean(planeReady && hasMappedPose);
     });
 
     SceneLoader.ImportMeshAsync("", MODEL_URL, "", scene)
@@ -188,9 +220,8 @@ export function useAREngine() {
 
     function handleSelect() {
       if (isPlaced || !modelRoot) return;
-      const p = getCameraPlanePoint();
-      p.y = virtualPlaneY;
-      placeModel({ pos: p, rot: Quaternion.Identity(), yRot: 0 });
+      const p = getCameraPointOnSurface();
+      placeModel({ pos: p, rot: reticle.rotationQuaternion?.clone() ?? Quaternion.Identity(), yRot: 0 });
     }
 
     window.resetAR = () => {
@@ -204,11 +235,18 @@ export function useAREngine() {
       isPlaced = false;
       stableCount = 0;
       stableBuffer = [];
-      planeReady = Boolean(xrCamera);
-      targetPlaneY = 0;
-      virtualPlaneY = 0;
+      planeReady = false;
+      hasPlanePose = false;
+      hasMappedPose = false;
+      mappedPlaneScale = 1;
+      targetMappedPlaneScale = 1;
+      _targetPlanePos.set(0, 0, 0);
+      _targetPlaneRot.copyFrom(Quaternion.Identity());
+      _mappedPlanePos.set(0, 0, 0);
+      _mappedPlaneRot.copyFrom(Quaternion.Identity());
       reticle.isVisible = false;
       surfacePlane.isVisible = false;
+      surfacePlane.scaling.set(1, 1, 1);
       setSurfaceReady(planeReady);
     };
 
@@ -259,10 +297,29 @@ export function useAREngine() {
         if (results.length > 0) {
           const hit = results[0];
           const pos = new Vector3();
-          hit.transformationMatrix.decompose(undefined, undefined, pos);
+          const rot = new Quaternion();
+          hit.transformationMatrix.decompose(undefined, rot, pos);
           if (isPositionStable(pos)) stableCount = Math.min(stableCount + 1, STABLE_FRAMES_REQ + 1);
           else stableCount = 0;
-          targetPlaneY = pos.y;
+          _targetPlanePos.copyFrom(pos);
+          _targetPlaneRot.copyFrom(rot);
+          if (!hasPlanePose) {
+            reticle.position.copyFrom(pos);
+            reticle.rotationQuaternion?.copyFrom(rot);
+            hasPlanePose = true;
+          }
+          if (!hasMappedPose || stableCount >= STABLE_FRAMES_REQ) {
+            _mappedPlanePos.copyFrom(_targetPlanePos);
+            _mappedPlaneRot.copyFrom(_targetPlaneRot);
+            if (!hasMappedPose) {
+              surfacePlane.position.copyFrom(_mappedPlanePos);
+              surfacePlane.rotationQuaternion = surfacePlane.rotationQuaternion || Quaternion.Identity();
+              surfacePlane.rotationQuaternion.copyFrom(_mappedPlaneRot);
+              hasMappedPose = true;
+            }
+          }
+          planeReady = true;
+          setSurfaceReady(true);
           if (stableCount >= STABLE_FRAMES_REQ) {
             planeReady = true;
             setSurfaceReady(true);
@@ -278,8 +335,8 @@ export function useAREngine() {
         if (state === WebXRState.IN_XR) {
           setInSession(true);
           xrCamera = xr.baseExperience.camera;
-          planeReady = true;
-          setSurfaceReady(true);
+          planeReady = false;
+          setSurfaceReady(false);
           const session = xr.baseExperience.sessionManager.session;
           const onSel = () => handleSelect();
           session.addEventListener("select", onSel);
