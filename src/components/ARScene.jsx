@@ -115,10 +115,7 @@ export default function ARScene() {
 
     // ── Place / lock the model ────────────────────────────────────────────
     function placeModel() {
-      if (!modelRoot) {
-        console.warn("⚠️ Model not loaded yet");
-        return;
-      }
+      if (!modelRoot) { console.warn("⚠️ Model not loaded yet"); return; }
       if (isPlaced) return;
 
       const { pos, rot } = getPlacementTransform();
@@ -129,12 +126,23 @@ export default function ARScene() {
 
       modelRoot.position.copyFrom(pos);
 
-      // Only rotate on Y so the model stands upright
-      const euler = rot.toEulerAngles();
-      modelRoot.rotationQuaternion = null;
-      modelRoot.rotation = new Vector3(0, euler.y, 0);
+      // Rotate the model to face the camera (Y axis only so it stays upright).
+      // This is the same "angle-changing" feature the reticle had – now applied
+      // directly to the food model so it always presents its front face to the user.
+      if (xrCamera) {
+        const camPos = xrCamera.position.clone();
+        const toCamera = camPos.subtract(pos);          // vector from model → camera
+        const yAngle = Math.atan2(toCamera.x, toCamera.z); // horizontal angle only
+        modelRoot.rotationQuaternion = null;
+        modelRoot.rotation = new Vector3(0, yAngle, 0);
+      } else {
+        // Fallback – use surface normal Y rotation from hit test
+        const euler = rot.toEulerAngles();
+        modelRoot.rotationQuaternion = null;
+        modelRoot.rotation = new Vector3(0, euler.y, 0);
+      }
 
-      // Freeze world matrix → zero CPU cost, zero drift
+      // Freeze world matrix → zero CPU cost, zero drift, size never changes
       modelRoot.freezeWorldMatrix();
       modelRoot.getChildMeshes(false).forEach((m) => m.freezeWorldMatrix());
 
