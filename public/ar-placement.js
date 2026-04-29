@@ -3,6 +3,7 @@
  * Loaded as a plain script AFTER A-Frame CDN in index.html.
  * Handles: hit-test, reticle, model placement, drift-prevention.
  */
+/* global AFRAME */
 (function () {
   if (!window.AFRAME) { console.error("AFRAME not found"); return; }
 
