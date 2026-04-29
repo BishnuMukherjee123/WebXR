@@ -13,6 +13,7 @@ import { SceneLoader } from "@babylonjs/core/Loading/sceneLoader";
 
 const MODEL_URL          = "https://iskchovltfnohyftjckg.supabase.co/storage/v1/object/public/models/10.glb";
 const MODEL_SCALE        = 3.0;
+const SURFACE_FLOAT      = 0.05;
 const RETICLE_LERP       = 0.08;
 const STABLE_FRAMES_REQ  = 4;
 const VARIANCE_THRESHOLD = 0.025;
@@ -129,9 +130,9 @@ export function useAREngine() {
       modelRoot.getChildMeshes(false).forEach((m) => (m.isVisible = true));
     }
 
-    function applyLocalPose(parentNode, yRot) {
+    function applyLocalPose(parentNode, yRot = 0) {
       modelRoot.parent             = parentNode;
-      modelRoot.position           = new Vector3(0, modelYOffset, 0);
+      modelRoot.position           = new Vector3(0, modelYOffset + SURFACE_FLOAT, 0);
       modelRoot.rotationQuaternion = null;
       modelRoot.rotation           = new Vector3(0, yRot, 0);
       modelRoot.scaling            = new Vector3(MODEL_SCALE, MODEL_SCALE, MODEL_SCALE);
@@ -155,16 +156,19 @@ export function useAREngine() {
     }
 
     // Placement — INSTANT visual response, anchor created in background
-    async function placeModel(floorX, floorZ, yRot, rotQuat) {
+    async function placeModel(surfacePose) {
       if (!modelRoot) { console.warn("Model not loaded yet"); return; }
+      const { pos, rot, yRot = 0, hitResult = null } = surfacePose;
 
       // 1. INSTANT: show model immediately using a temp node
       const tempNode = new TransformNode("temp", scene);
-      tempNode.position = new Vector3(floorX, 0, floorZ);
+      tempNode.position = pos.clone();
+      tempNode.rotationQuaternion = rot ? rot.clone() : Quaternion.Identity();
       applyLocalPose(tempNode, yRot);
       showModel();
-      shadowCatcher.position.x = floorX;
-      shadowCatcher.position.z = floorZ;
+      shadowCatcher.position.copyFrom(pos);
+      shadowCatcher.position.y += 0.001;
+      shadowCatcher.rotationQuaternion = rot ? rot.clone() : Quaternion.Identity();
       shadowCatcher.isVisible  = true;
       isPlaced               = true;
       reticle.isVisible      = false;
@@ -173,10 +177,11 @@ export function useAREngine() {
 
       // 2. BACKGROUND: create native anchor for world-locking
       //    Reparent model to anchor.attachedNode when ready
-      if (anchorSystem && rotQuat) {
+      if (anchorSystem && rot) {
         try {
-          const pos    = new Vector3(floorX, 0, floorZ);
-          const anchor = await anchorSystem.addAnchorAtPositionAndRotationAsync(pos, rotQuat);
+          const anchor = hitResult?.xrHitResult?.createAnchor
+            ? await anchorSystem.addAnchorPointUsingHitTestResultAsync(hitResult)
+            : await anchorSystem.addAnchorAtPositionAndRotationAsync(pos, rot);
           if (anchor?.attachedNode) {
             placedAnchor = anchor;
             applyLocalPose(anchor.attachedNode, yRot);
@@ -194,27 +199,22 @@ export function useAREngine() {
       if (isPlaced || !modelRoot) return;
 
       if (reticle.isVisible) {
-        // THREE.js reference pattern: take position from SMOOTHED reticle,
-        // not raw hit result. Model lands where the user SAW the indicator.
-        const floorX = reticle.position.x;
-        const floorZ = reticle.position.z;
-        const yRot   = _lerpRot.toEulerAngles().y;
-        const rot    = _lerpRot.clone();
-        await placeModel(floorX, floorZ, yRot, rot);
+        const { pos, rot, yRot } = decomposeHit(lastHitResult);
+        await placeModel({ pos, rot, yRot, hitResult: lastHitResult });
       } else if (lastHitResult) {
         // Surface detected but reticle not yet stable — use raw hit
         const { pos, rot, yRot } = decomposeHit(lastHitResult);
-        await placeModel(pos.x, pos.z, yRot, rot);
+        await placeModel({ pos, rot, yRot, hitResult: lastHitResult });
       } else {
         // No surface at all — camera-ray floor fallback
         const p = getCameraFloor();
-        await placeModel(p.x, p.z, 0, null);
+        await placeModel({ pos: p, rot: Quaternion.Identity(), yRot: 0 });
       }
     }
 
     window.resetAR = () => {
       if (modelRoot) { modelRoot.parent = null; modelRoot.setEnabled(false); }
-      if (placedAnchor) { try { placedAnchor.remove(); } catch (_) {} placedAnchor = null; }
+      if (placedAnchor) { try { placedAnchor.remove(); } catch { /* Anchor may already be gone after session end. */ } placedAnchor = null; }
       shadowCatcher.isVisible = false;
       isPlaced = false; lastHitResult = null; stableCount = 0; stableBuffer = [];
       reticle.isVisible = false; surfacePlane.isVisible = false;
@@ -231,13 +231,13 @@ export function useAREngine() {
       xrHelperRef.current = xr;
       const fm = xr.baseExperience.featuresManager;
 
-      try { fm.enableFeature(WebXRFeatureName.DOM_OVERLAY, "latest", { element: overlayRef.current }); } catch (_) {}
+      try { fm.enableFeature(WebXRFeatureName.DOM_OVERLAY, "latest", { element: overlayRef.current }); } catch { /* DOM overlay is optional. */ }
 
       try {
         fm.enableFeature(WebXRFeatureName.LIGHT_ESTIMATION, "latest", {
           createDefaultLight: true, reflectionFormat: "srgba8",
         });
-      } catch (_) {}
+      } catch { /* Light estimation is optional. */ }
 
       // BUG FIX: removed entityTypes:["mesh"] — mesh-detection is a separate
       // WebXR feature not available on most devices. Using "plane" only which
@@ -247,7 +247,7 @@ export function useAREngine() {
         hitTest = fm.enableFeature(WebXRFeatureName.HIT_TEST, "latest", {
           entityTypes: ["plane"],
         });
-      } catch (_) {
+      } catch {
         // Fallback: no entity type restriction — works on all devices
         hitTest = fm.enableFeature(WebXRFeatureName.HIT_TEST, "latest");
       }
@@ -278,7 +278,7 @@ export function useAREngine() {
       });
 
       try { anchorSystem = fm.enableFeature(WebXRFeatureName.ANCHOR_SYSTEM, "latest"); }
-      catch (_) {}
+      catch { /* Native anchors are optional. */ }
 
       xr.baseExperience.onStateChangedObservable.add((state) => {
         if (state === WebXRState.IN_XR) {
