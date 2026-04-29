@@ -192,10 +192,21 @@ export function useAREngine() {
 
     async function handleSelect() {
       if (isPlaced || !modelRoot) return;
-      if (lastHitResult) {
+
+      if (reticle.isVisible) {
+        // THREE.js reference pattern: take position from SMOOTHED reticle,
+        // not raw hit result. Model lands where the user SAW the indicator.
+        const floorX = reticle.position.x;
+        const floorZ = reticle.position.z;
+        const yRot   = _lerpRot.toEulerAngles().y;
+        const rot    = _lerpRot.clone();
+        await placeModel(floorX, floorZ, yRot, rot);
+      } else if (lastHitResult) {
+        // Surface detected but reticle not yet stable — use raw hit
         const { pos, rot, yRot } = decomposeHit(lastHitResult);
         await placeModel(pos.x, pos.z, yRot, rot);
       } else {
+        // No surface at all — camera-ray floor fallback
         const p = getCameraFloor();
         await placeModel(p.x, p.z, 0, null);
       }
