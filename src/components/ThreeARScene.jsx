@@ -3,9 +3,14 @@ import * as THREE from "three";
 import { GLTFLoader } from "three/examples/jsm/loaders/GLTFLoader.js";
 import { DRACOLoader } from "three/examples/jsm/loaders/DRACOLoader.js";
 
-const MODEL_URL = "/models/10.glb";
 const MODEL_BASE_SCALE = 0.8;
 const PLACEMENT_DEPTH = -2.05;
+const MODEL_URL =
+  "https://iskchovltfnohyftjckg.supabase.co/storage/v1/object/public/models/10.glb";
+
+const DISHES = [
+  { id: "dish-1", name: "Bong Kebab", url: MODEL_URL },
+];
 
 export default function ThreeARScene() {
   const containerRef = useRef(null);
@@ -14,6 +19,9 @@ export default function ThreeARScene() {
   const cleanupRef = useRef(null);
   const anchorRef = useRef(null);
   const cameraRef = useRef(null);
+  const loaderRef = useRef(null);
+  const dracoLoaderRef = useRef(null);
+  const currentModelRef = useRef(null);
   const orientationRef = useRef({ current: null, baseline: null, available: false });
   const pointersRef = useRef(new Map());
   const gestureRef = useRef({ x: 0, y: 0, distance: 0, scale: 1, placed: false });
@@ -122,24 +130,13 @@ export default function ThreeARScene() {
     shadowCatcher.receiveShadow = true;
     anchor.add(shadowCatcher);
 
-    const dracoLoader = new DRACOLoader();
-    dracoLoader.setDecoderPath("/draco/");
-    dracoLoader.setDecoderConfig({ type: "wasm" });
+    dracoLoaderRef.current = new DRACOLoader();
+    dracoLoaderRef.current.setDecoderPath("/draco/");
+    dracoLoaderRef.current.setDecoderConfig({ type: "wasm" });
 
-    const loader = new GLTFLoader();
-    loader.setDRACOLoader(dracoLoader);
-    const gltf = await loader.loadAsync(MODEL_URL);
-    const model = gltf.scene;
-    normalizeModel(model);
-    model.position.set(0, 0, 0);
-    model.scale.setScalar(MODEL_BASE_SCALE);
-    model.traverse((child) => {
-      if (!child.isMesh) return;
-      child.castShadow = true;
-      child.receiveShadow = false;
-      if (child.material) child.material.needsUpdate = true;
-    });
-    anchor.add(model);
+    loaderRef.current = new GLTFLoader();
+    loaderRef.current.setDRACOLoader(dracoLoaderRef.current);
+    await loadDish(DISHES[0]);
 
     function resize() {
       const width = container.clientWidth || window.innerWidth;
@@ -166,11 +163,52 @@ export default function ThreeARScene() {
       stopOrientation?.();
       stream.getTracks().forEach((track) => track.stop());
       disposeWorld(scene);
-      dracoLoader.dispose();
+      dracoLoaderRef.current?.dispose();
       renderer.dispose();
       anchorRef.current = null;
       cameraRef.current = null;
+      loaderRef.current = null;
+      dracoLoaderRef.current = null;
+      currentModelRef.current = null;
     };
+  }
+
+  async function loadDish(dish) {
+    const anchor = anchorRef.current;
+    const loader = loaderRef.current;
+    if (!anchor || !loader) return;
+
+    setStatus(`Loading ${dish.name}...`);
+
+    try {
+      if (currentModelRef.current) {
+        anchor.remove(currentModelRef.current);
+        disposeObject(currentModelRef.current);
+        currentModelRef.current = null;
+      }
+
+      const gltf = await loader.loadAsync(dish.url);
+      const model = gltf.scene;
+      normalizeModel(model);
+      model.position.set(0, 0, 0);
+      model.scale.setScalar(MODEL_BASE_SCALE);
+      model.traverse((child) => {
+        if (!child.isMesh) return;
+        child.castShadow = true;
+        child.receiveShadow = false;
+        if (child.material) child.material.needsUpdate = true;
+      });
+      anchor.add(model);
+      currentModelRef.current = model;
+      setStatus(
+        anchor.visible
+          ? `${dish.name} placed. Drag to rotate, pinch to resize.`
+          : `Tap the table/floor area to place ${dish.name}.`,
+      );
+    } catch (err) {
+      console.error("[ThreeAR] Dish load failed", err);
+      setStatus(`Could not load ${dish.name}.`);
+    }
   }
 
   function normalizeModel(model) {
@@ -402,12 +440,16 @@ export default function ThreeARScene() {
 
 function disposeWorld(scene) {
   scene.traverse((obj) => {
-    if (obj.geometry) obj.geometry.dispose();
-    if (obj.material) {
-      const materials = Array.isArray(obj.material) ? obj.material : [obj.material];
-      materials.forEach((mat) => mat.dispose());
-    }
+    disposeObject(obj);
   });
+}
+
+function disposeObject(obj) {
+  if (obj.geometry) obj.geometry.dispose();
+  if (obj.material) {
+    const materials = Array.isArray(obj.material) ? obj.material : [obj.material];
+    materials.forEach((mat) => mat.dispose());
+  }
 }
 
 function distance(a, b) {

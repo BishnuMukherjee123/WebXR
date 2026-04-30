@@ -161,3 +161,48 @@ button {
   pointer-events: auto;
   backdrop-filter: blur(10px);
 }
+
+.three-ar__dish-rail {
+  position: fixed;
+  right: 0;
+  bottom: calc(max(28px, env(safe-area-inset-bottom)) + 62px);
+  left: 0;
+  z-index: 6;
+  display: flex;
+  gap: 8px;
+  padding: 0 14px 2px;
+  overflow-x: auto;
+  pointer-events: auto;
+  scrollbar-width: none;
+}
+
+.three-ar__dish-rail::-webkit-scrollbar {
+  display: none;
+}
+
+.three-ar__dish-rail button {
+  flex: 0 0 auto;
+  max-width: 138px;
+  min-width: 84px;
+  padding: 10px 13px;
+  overflow: hidden;
+  border: 1px solid rgba(255, 255, 255, 0.24);
+  border-radius: 999px;
+  color: #fff;
+  background: rgba(20, 20, 20, 0.76);
+  font-size: 13px;
+  font-weight: 750;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  backdrop-filter: blur(10px);
+}
+
+.three-ar__dish-rail button.is-active {
+  color: #000;
+  background: #fff;
+  border-color: #fff;
+}
+
+.three-ar__dish-rail button:disabled {
+  opacity: 0.65;
+}
