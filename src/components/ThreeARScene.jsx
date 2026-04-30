@@ -234,6 +234,9 @@ function NativeModelViewerMode({ onBack }) {
           alt="Bong Kebab"
           ar
           ar-modes="webxr scene-viewer quick-look"
+          ar-placement="floor"
+          ar-scale="auto"
+          quick-look-browsers="safari chrome"
           camera-controls
           auto-rotate
           shadow-intensity="1"
