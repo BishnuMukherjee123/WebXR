@@ -14,6 +14,7 @@ export default function ThreeARScene() {
   const cleanupRef = useRef(null);
   const anchorRef = useRef(null);
   const cameraRef = useRef(null);
+  const orientationRef = useRef({ current: null, baseline: null, available: false });
   const pointersRef = useRef(new Map());
   const gestureRef = useRef({ x: 0, y: 0, distance: 0, scale: 1, placed: false });
   const [started, setStarted] = useState(false);
@@ -49,8 +50,9 @@ export default function ThreeARScene() {
       video.setAttribute("playsinline", "");
       video.setAttribute("webkit-playsinline", "");
       await video.play();
+      const stopOrientation = await startOrientationTracking();
 
-      const cleanup = await initThree(stream);
+      const cleanup = await initThree(stream, stopOrientation);
       cleanupRef.current = cleanup;
       setStarted(true);
       setStatus("Tap the table/floor area to place the dish.");
@@ -63,7 +65,7 @@ export default function ThreeARScene() {
     }
   }
 
-  async function initThree(stream) {
+  async function initThree(stream, stopOrientation) {
     const container = containerRef.current;
     const canvas = canvasRef.current;
     const renderer = new THREE.WebGLRenderer({
@@ -150,6 +152,7 @@ export default function ThreeARScene() {
     let rafId = 0;
     function render() {
       rafId = requestAnimationFrame(render);
+      updateCameraForPlacedAnchor(camera);
       renderer.render(scene, camera);
     }
 
@@ -160,6 +163,7 @@ export default function ThreeARScene() {
     return () => {
       cancelAnimationFrame(rafId);
       window.removeEventListener("resize", resize);
+      stopOrientation?.();
       stream.getTracks().forEach((track) => track.stop());
       disposeWorld(scene);
       dracoLoader.dispose();
@@ -210,8 +214,90 @@ export default function ThreeARScene() {
     }
 
     anchor.visible = true;
+    orientationRef.current.baseline = orientationRef.current.current
+      ? { ...orientationRef.current.current }
+      : null;
     setPlaced(true);
-    setStatus("Placed. Drag to rotate, pinch to resize, Reset to place again.");
+    setStatus(
+      orientationRef.current.available
+        ? "Placed. Move your phone to view, drag to rotate, pinch to resize."
+        : "Placed. Drag to rotate, pinch to resize.",
+    );
+  }
+
+  async function startOrientationTracking() {
+    if (!window.DeviceOrientationEvent) {
+      console.warn("[ThreeAR] Device orientation is not available");
+      return null;
+    }
+
+    try {
+      if (typeof DeviceOrientationEvent.requestPermission === "function") {
+        const permission = await DeviceOrientationEvent.requestPermission();
+        if (permission !== "granted") {
+          console.warn("[ThreeAR] Device orientation permission was not granted");
+          return null;
+        }
+      }
+    } catch (err) {
+      console.warn("[ThreeAR] Device orientation permission failed", err);
+      return null;
+    }
+
+    const onOrientation = (event) => {
+      if (
+        typeof event.alpha !== "number" ||
+        typeof event.beta !== "number" ||
+        typeof event.gamma !== "number"
+      ) {
+        return;
+      }
+
+      orientationRef.current.current = {
+        alpha: event.alpha,
+        beta: event.beta,
+        gamma: event.gamma,
+      };
+      orientationRef.current.available = true;
+    };
+
+    window.addEventListener("deviceorientation", onOrientation, true);
+    return () => window.removeEventListener("deviceorientation", onOrientation, true);
+  }
+
+  function updateCameraForPlacedAnchor(camera) {
+    const anchor = anchorRef.current;
+    const orientation = orientationRef.current;
+    if (!anchor?.visible || !orientation.current || !orientation.baseline) {
+      camera.position.lerp(new THREE.Vector3(0, 0.95, 2.45), 0.08);
+      camera.lookAt(0, 0.15, PLACEMENT_DEPTH);
+      return;
+    }
+
+    const yaw = THREE.MathUtils.degToRad(
+      shortestAngle(orientation.current.alpha, orientation.baseline.alpha),
+    );
+    const pitch = THREE.MathUtils.degToRad(
+      THREE.MathUtils.clamp(orientation.current.beta - orientation.baseline.beta, -35, 35),
+    );
+    const roll = THREE.MathUtils.degToRad(
+      THREE.MathUtils.clamp(orientation.current.gamma - orientation.baseline.gamma, -28, 28),
+    );
+
+    const radius = 2.45;
+    const target = new THREE.Vector3(
+      anchor.position.x,
+      anchor.position.y + 0.28 * anchor.scale.y,
+      anchor.position.z,
+    );
+    const desired = new THREE.Vector3(
+      target.x + Math.sin(-yaw) * radius + Math.sin(roll) * 0.28,
+      THREE.MathUtils.clamp(0.95 - Math.sin(pitch) * 1.15, 0.35, 1.75),
+      target.z + Math.cos(-yaw) * radius,
+    );
+
+    camera.position.lerp(desired, 0.12);
+    camera.lookAt(target);
   }
 
   function resetModel() {
@@ -326,4 +412,11 @@ function disposeWorld(scene) {
 
 function distance(a, b) {
   return Math.hypot(a.x - b.x, a.y - b.y);
+}
+
+function shortestAngle(current, base) {
+  let delta = current - base;
+  while (delta > 180) delta -= 360;
+  while (delta < -180) delta += 360;
+  return delta;
 }
