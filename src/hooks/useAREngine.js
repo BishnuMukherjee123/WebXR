@@ -98,6 +98,7 @@ export function useAREngine() {
       dCtx.lineTo(i + TEX, TEX);
       dCtx.stroke();
     }
+    
     dTex.hasAlpha = true;
     dTex.update();
     const diagMat = new StandardMaterial("dm", scene);
