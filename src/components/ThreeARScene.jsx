@@ -5,7 +5,7 @@ import { DRACOLoader } from "three/examples/jsm/loaders/DRACOLoader.js";
 
 const MODEL_URL = "/models/10.glb";
 const MODEL_BASE_SCALE = 0.8;
-const FALLBACK_DISTANCE = -1.8;
+const PLACEMENT_DEPTH = -2.05;
 
 export default function ThreeARScene() {
   const containerRef = useRef(null);
@@ -13,200 +13,58 @@ export default function ThreeARScene() {
   const canvasRef = useRef(null);
   const cleanupRef = useRef(null);
   const anchorRef = useRef(null);
-  const reticleRef = useRef(null);
+  const cameraRef = useRef(null);
   const pointersRef = useRef(new Map());
-  const gestureRef = useRef({ x: 0, y: 0, distance: 0, scale: 1 });
-  const modeRef = useRef("fallback");
+  const gestureRef = useRef({ x: 0, y: 0, distance: 0, scale: 1, placed: false });
   const [started, setStarted] = useState(false);
   const [loading, setLoading] = useState(false);
-  const [status, setStatus] = useState("Point your camera at a clear surface.");
+  const [placed, setPlaced] = useState(false);
+  const [status, setStatus] = useState("Camera AR viewer");
   const [error, setError] = useState("");
 
   async function startAR() {
+    if (!navigator.mediaDevices?.getUserMedia) {
+      setError("Camera API is not available in this browser.");
+      return;
+    }
+
     setError("");
     setLoading(true);
 
     try {
-      const xrSupported = Boolean(
-        navigator.xr && await navigator.xr.isSessionSupported("immersive-ar"),
-      );
+      const stream = await navigator.mediaDevices.getUserMedia({
+        video: {
+          facingMode: { ideal: "environment" },
+          width: { ideal: 1280 },
+          height: { ideal: 720 },
+        },
+        audio: false,
+      });
 
-      if (xrSupported) {
-        const cleanup = await initWebXR();
-        cleanupRef.current = cleanup;
-        modeRef.current = "webxr";
-        setStarted(true);
-        setStatus("Scan a table or floor, then tap to place.");
-        return;
-      }
+      const video = videoRef.current;
+      video.srcObject = stream;
+      video.muted = true;
+      video.autoplay = true;
+      video.playsInline = true;
+      video.setAttribute("playsinline", "");
+      video.setAttribute("webkit-playsinline", "");
+      await video.play();
 
-      if (!navigator.mediaDevices?.getUserMedia) {
-        setError("Camera API is not available in this browser.");
-        return;
-      }
-
-      const cleanup = await initFallbackCamera();
+      const cleanup = await initThree(stream);
       cleanupRef.current = cleanup;
-      modeRef.current = "fallback";
       setStarted(true);
-      setStatus("Fallback viewer: drag to rotate, pinch to resize.");
+      setStatus("Tap the table/floor area to place the dish.");
+      console.log("[ThreeAR] Browser camera viewer started", `${video.videoWidth}x${video.videoHeight}`);
     } catch (err) {
       console.error("[ThreeAR] Start failed", err);
-      setError(err?.message || "Could not start AR.");
+      setError(err?.message || "Could not start camera.");
     } finally {
       setLoading(false);
     }
   }
 
-  async function initWebXR() {
-    const session = await navigator.xr.requestSession("immersive-ar", {
-      requiredFeatures: ["hit-test"],
-      optionalFeatures: ["dom-overlay", "light-estimation"],
-      domOverlay: { root: containerRef.current },
-    });
-
-    const { renderer, scene, camera, anchor, dracoLoader } = await createThreeWorld({
-      xr: true,
-      anchorVisible: false,
-    });
-
-    renderer.xr.enabled = true;
-    renderer.xr.setReferenceSpaceType("local");
-    await renderer.xr.setSession(session);
-
-    const reticle = createReticle();
-    scene.add(reticle);
-    reticleRef.current = reticle;
-
-    let hitTestSource = null;
-    let hitTestSourceRequested = false;
-    let surfaceVisible = false;
-
-    function onSelect() {
-      if (!reticle.visible) return;
-      reticle.matrix.decompose(anchor.position, anchor.quaternion, anchor.scale);
-      anchor.scale.setScalar(1);
-      anchor.visible = true;
-      reticle.visible = false;
-      setStatus("Placed. Move around to view from different angles.");
-      console.log("[ThreeAR] Model placed at WebXR hit-test pose");
-    }
-
-    session.addEventListener("select", onSelect);
-
-    renderer.setAnimationLoop((_, frame) => {
-      if (frame) {
-        const referenceSpace = renderer.xr.getReferenceSpace();
-        const xrSession = renderer.xr.getSession();
-
-        if (!hitTestSourceRequested) {
-          xrSession.requestReferenceSpace("viewer")
-            .then((viewerSpace) => xrSession.requestHitTestSource({ space: viewerSpace }))
-            .then((source) => {
-              hitTestSource = source;
-              console.log("[ThreeAR] WebXR hit-test source ready");
-            })
-            .catch((err) => {
-              console.error("[ThreeAR] Hit-test failed", err);
-              setStatus("Surface tracking is not available on this device.");
-            });
-
-          xrSession.addEventListener("end", () => {
-            hitTestSourceRequested = false;
-            hitTestSource = null;
-          }, { once: true });
-
-          hitTestSourceRequested = true;
-        }
-
-        if (hitTestSource && !anchor.visible) {
-          const hits = frame.getHitTestResults(hitTestSource);
-          if (hits.length > 0) {
-            const pose = hits[0].getPose(referenceSpace);
-            reticle.visible = true;
-            reticle.matrix.fromArray(pose.transform.matrix);
-            if (!surfaceVisible) {
-              surfaceVisible = true;
-              setStatus("Surface found. Tap to place.");
-            }
-          } else {
-            reticle.visible = false;
-            if (surfaceVisible) {
-              surfaceVisible = false;
-              setStatus("Scan a table or floor, then tap to place.");
-            }
-          }
-        }
-      }
-
-      renderer.render(scene, camera);
-    });
-
-    return () => {
-      session.removeEventListener("select", onSelect);
-      renderer.setAnimationLoop(null);
-      if (hitTestSource) hitTestSource.cancel?.();
-      disposeWorld({ renderer, scene, dracoLoader });
-      anchorRef.current = null;
-      reticleRef.current = null;
-      if (session.visibilityState !== "hidden") session.end().catch(() => {});
-    };
-  }
-
-  async function initFallbackCamera() {
-    const stream = await navigator.mediaDevices.getUserMedia({
-      video: {
-        facingMode: { ideal: "environment" },
-        width: { ideal: 1280 },
-        height: { ideal: 720 },
-      },
-      audio: false,
-    });
-
-    const video = videoRef.current;
-    video.srcObject = stream;
-    video.muted = true;
-    video.playsInline = true;
-    video.setAttribute("playsinline", "");
-    video.setAttribute("webkit-playsinline", "");
-    await video.play();
-
-    const { renderer, scene, camera, dracoLoader } = await createThreeWorld({
-      xr: false,
-      anchorVisible: true,
-    });
-
-    function resize() {
-      const container = containerRef.current;
-      const width = container.clientWidth || window.innerWidth;
-      const height = container.clientHeight || window.innerHeight;
-      renderer.setSize(width, height, false);
-      camera.aspect = width / height;
-      camera.updateProjectionMatrix();
-    }
-
-    let rafId = 0;
-    function render() {
-      rafId = requestAnimationFrame(render);
-      renderer.render(scene, camera);
-    }
-
-    resize();
-    window.addEventListener("resize", resize);
-    render();
-
-    console.log("[ThreeAR] Fallback camera viewer started", `${video.videoWidth}x${video.videoHeight}`);
-
-    return () => {
-      cancelAnimationFrame(rafId);
-      window.removeEventListener("resize", resize);
-      stream.getTracks().forEach((track) => track.stop());
-      disposeWorld({ renderer, scene, dracoLoader });
-      anchorRef.current = null;
-    };
-  }
-
-  async function createThreeWorld({ xr, anchorVisible }) {
+  async function initThree(stream) {
+    const container = containerRef.current;
     const canvas = canvasRef.current;
     const renderer = new THREE.WebGLRenderer({
       canvas,
@@ -222,14 +80,13 @@ export default function ThreeARScene() {
 
     const scene = new THREE.Scene();
     const camera = new THREE.PerspectiveCamera(55, 1, 0.01, 100);
-    if (!xr) {
-      camera.position.set(0, 1.15, 2.4);
-      camera.lookAt(0, 0.25, FALLBACK_DISTANCE);
-    }
+    camera.position.set(0, 0.95, 2.45);
+    camera.lookAt(0, 0.15, PLACEMENT_DEPTH);
+    cameraRef.current = camera;
 
     const anchor = new THREE.Group();
-    anchor.visible = anchorVisible;
-    anchor.position.set(0, 0, xr ? 0 : FALLBACK_DISTANCE);
+    anchor.visible = false;
+    anchor.position.set(0, 0, PLACEMENT_DEPTH);
     scene.add(anchor);
     anchorRef.current = anchor;
 
@@ -282,22 +139,34 @@ export default function ThreeARScene() {
     });
     anchor.add(model);
 
-    return { renderer, scene, camera, anchor, dracoLoader };
-  }
+    function resize() {
+      const width = container.clientWidth || window.innerWidth;
+      const height = container.clientHeight || window.innerHeight;
+      renderer.setSize(width, height, false);
+      camera.aspect = width / height;
+      camera.updateProjectionMatrix();
+    }
 
-  function createReticle() {
-    const geometry = new THREE.RingGeometry(0.12, 0.16, 48);
-    geometry.rotateX(-Math.PI / 2);
-    const material = new THREE.MeshBasicMaterial({
-      color: 0xffffff,
-      transparent: true,
-      opacity: 0.9,
-      side: THREE.DoubleSide,
-    });
-    const reticle = new THREE.Mesh(geometry, material);
-    reticle.matrixAutoUpdate = false;
-    reticle.visible = false;
-    return reticle;
+    let rafId = 0;
+    function render() {
+      rafId = requestAnimationFrame(render);
+      renderer.render(scene, camera);
+    }
+
+    resize();
+    window.addEventListener("resize", resize);
+    render();
+
+    return () => {
+      cancelAnimationFrame(rafId);
+      window.removeEventListener("resize", resize);
+      stream.getTracks().forEach((track) => track.stop());
+      disposeWorld(scene);
+      dracoLoader.dispose();
+      renderer.dispose();
+      anchorRef.current = null;
+      cameraRef.current = null;
+    };
   }
 
   function normalizeModel(model) {
@@ -314,36 +183,49 @@ export default function ThreeARScene() {
     model.position.y -= scaledBox.min.y;
   }
 
-  function disposeWorld({ renderer, scene, dracoLoader }) {
-    scene.traverse((obj) => {
-      if (obj.geometry) obj.geometry.dispose();
-      if (obj.material) {
-        const materials = Array.isArray(obj.material) ? obj.material : [obj.material];
-        materials.forEach((mat) => mat.dispose());
-      }
-    });
-    dracoLoader.dispose();
-    renderer.dispose();
+  function placeAtScreenPoint(clientX, clientY) {
+    const anchor = anchorRef.current;
+    const camera = cameraRef.current;
+    const canvas = canvasRef.current;
+    if (!anchor || !camera || !canvas) return;
+
+    const rect = canvas.getBoundingClientRect();
+    const ndc = new THREE.Vector2(
+      ((clientX - rect.left) / rect.width) * 2 - 1,
+      -(((clientY - rect.top) / rect.height) * 2 - 1),
+    );
+
+    const raycaster = new THREE.Raycaster();
+    raycaster.setFromCamera(ndc, camera);
+
+    const placementPlane = new THREE.Plane(new THREE.Vector3(0, 1, 0), 0);
+    const hit = new THREE.Vector3();
+    const hasHit = raycaster.ray.intersectPlane(placementPlane, hit);
+
+    if (hasHit) {
+      anchor.position.copy(hit);
+      anchor.position.y = 0;
+    } else {
+      anchor.position.set(ndc.x * 1.1, 0, PLACEMENT_DEPTH);
+    }
+
+    anchor.visible = true;
+    setPlaced(true);
+    setStatus("Placed. Drag to rotate, pinch to resize, Reset to place again.");
   }
 
   function resetModel() {
     const anchor = anchorRef.current;
     if (!anchor) return;
-
-    if (modeRef.current === "webxr") {
-      anchor.visible = false;
-      if (reticleRef.current) reticleRef.current.visible = false;
-      setStatus("Scan a table or floor, then tap to place.");
-      return;
-    }
-
+    anchor.visible = false;
     anchor.rotation.set(0, 0, 0);
     anchor.scale.setScalar(1);
-    anchor.position.set(0, 0, FALLBACK_DISTANCE);
+    anchor.position.set(0, 0, PLACEMENT_DEPTH);
+    setPlaced(false);
+    setStatus("Tap the table/floor area to place the dish.");
   }
 
   function onPointerDown(event) {
-    if (modeRef.current === "webxr") return;
     event.currentTarget.setPointerCapture(event.pointerId);
     pointersRef.current.set(event.pointerId, { x: event.clientX, y: event.clientY });
     const points = [...pointersRef.current.values()];
@@ -352,13 +234,13 @@ export default function ThreeARScene() {
       y: event.clientY,
       distance: points.length >= 2 ? distance(points[0], points[1]) : 0,
       scale: anchorRef.current?.scale.x || 1,
+      placed,
     };
   }
 
   function onPointerMove(event) {
-    if (modeRef.current === "webxr") return;
     const anchor = anchorRef.current;
-    if (!anchor || !pointersRef.current.has(event.pointerId)) return;
+    if (!anchor || !pointersRef.current.has(event.pointerId) || !placed) return;
 
     pointersRef.current.set(event.pointerId, { x: event.clientX, y: event.clientY });
     const points = [...pointersRef.current.values()];
@@ -376,15 +258,19 @@ export default function ThreeARScene() {
     }
 
     const dx = event.clientX - gestureRef.current.x;
-    const dy = event.clientY - gestureRef.current.y;
     anchor.rotation.y += dx * 0.01;
-    anchor.position.z = THREE.MathUtils.clamp(anchor.position.z + dy * 0.004, -3.2, -0.9);
     gestureRef.current.x = event.clientX;
     gestureRef.current.y = event.clientY;
   }
 
   function onPointerUp(event) {
+    const pointer = pointersRef.current.get(event.pointerId);
     pointersRef.current.delete(event.pointerId);
+
+    if (!pointer || gestureRef.current.placed || pointersRef.current.size > 0) return;
+
+    const move = Math.hypot(event.clientX - pointer.x, event.clientY - pointer.y);
+    if (move < 8) placeAtScreenPoint(event.clientX, event.clientY);
   }
 
   useEffect(() => {
@@ -411,7 +297,7 @@ export default function ThreeARScene() {
         <div className="three-ar__landing">
           <div className="three-ar__badge">AR</div>
           <h1>Aroma AR</h1>
-          <p>Tap Launch AR, scan a surface, then tap to place the dish.</p>
+          <p>Open the camera, then tap the table or floor area to place the dish.</p>
           <button onClick={startAR} disabled={loading}>
             {loading ? "Starting..." : "Launch AR"}
           </button>
@@ -426,6 +312,16 @@ export default function ThreeARScene() {
       )}
     </div>
   );
+}
+
+function disposeWorld(scene) {
+  scene.traverse((obj) => {
+    if (obj.geometry) obj.geometry.dispose();
+    if (obj.material) {
+      const materials = Array.isArray(obj.material) ? obj.material : [obj.material];
+      materials.forEach((mat) => mat.dispose());
+    }
+  });
 }
 
 function distance(a, b) {
