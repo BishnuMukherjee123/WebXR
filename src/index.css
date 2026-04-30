@@ -1,91 +1,163 @@
-*, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
+*, *::before, *::after {
+  box-sizing: border-box;
+}
 
-html, body, #root {
+html,
+body,
+#root {
   width: 100%;
   height: 100%;
+  margin: 0;
   overflow: hidden;
   background: #000;
-  font-family: system-ui, -apple-system, sans-serif;
+  font-family: system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
 }
 
-/* ── WebXR AR Button (injected by Three.js ARButton into document.body) ──── */
-/* Three.js ARButton creates a <button> directly on body. We style it here. */
-body > button {
-  position: fixed !important;
-  bottom: 32px !important;
-  left: 50% !important;
-  transform: translateX(-50%) !important;
-  width: auto !important;
-  min-width: 200px !important;
-  padding: 14px 32px !important;
-  border-radius: 100px !important;
-  background: rgba(255, 255, 255, 0.12) !important;
-  border: 1.5px solid rgba(255, 255, 255, 0.5) !important;
-  color: #fff !important;
-  font-size: 16px !important;
-  font-weight: 600 !important;
-  letter-spacing: 0.5px !important;
-  cursor: pointer !important;
-  backdrop-filter: blur(12px) !important;
-  -webkit-backdrop-filter: blur(12px) !important;
-  box-shadow: 0 4px 24px rgba(0, 255, 200, 0.18), 0 0 0 1px rgba(0,255,200,0.08) !important;
-  transition: background 0.2s, box-shadow 0.2s !important;
-  z-index: 100 !important;
+button {
+  font: inherit;
 }
 
-body > button:hover {
-  background: rgba(0, 255, 200, 0.18) !important;
-  box-shadow: 0 4px 32px rgba(0, 255, 200, 0.32) !important;
-}
-
-body > button:active {
-  background: rgba(0, 255, 200, 0.28) !important;
-}
-
-/* ── Landing / not-supported state ─────────────────────────────────────── */
-/* When AR is not supported, ARButton shows a disabled "AR Not Supported" button */
-body > button:disabled {
-  opacity: 0.5 !important;
-  cursor: not-allowed !important;
-  box-shadow: none !important;
-}
-
-/* ── Hint text pill (injected by dom-overlay, shown during session) ─────── */
-.ar-hint {
+.three-ar {
   position: fixed;
-  top: 20px;
+  inset: 0;
+  overflow: hidden;
+  background: #000;
+  touch-action: none;
+}
+
+.three-ar__video,
+.three-ar__canvas {
+  position: fixed;
+  inset: 0;
+  width: 100vw;
+  height: 100vh;
+}
+
+.three-ar__video {
+  z-index: 1;
+  object-fit: cover;
+  background: #000;
+}
+
+.three-ar__canvas {
+  z-index: 2;
+  display: block;
+  background: transparent;
+  touch-action: none;
+}
+
+.three-ar__hud {
+  position: fixed;
+  inset: 0;
+  z-index: 4;
+  pointer-events: none;
+}
+
+.three-ar__pill {
+  position: absolute;
+  top: max(18px, env(safe-area-inset-top));
   left: 50%;
   transform: translateX(-50%);
-  background: rgba(0, 0, 0, 0.55);
-  color: #fff;
-  font-size: 13px;
-  font-weight: 500;
-  padding: 6px 18px;
-  border-radius: 20px;
-  pointer-events: none;
-  white-space: nowrap;
-  z-index: 9999;
-  backdrop-filter: blur(6px);
-}
-
-/* ── Reset pill button (used inside XR dom-overlay) ─────────────────────── */
-.reset-btn {
-  position: fixed;
-  top: 16px;
-  right: 16px;
+  max-width: calc(100vw - 32px);
   padding: 8px 18px;
-  background: rgba(40, 40, 40, 0.85);
-  color: white;
-  border: 1px solid rgba(255, 255, 255, 0.3);
-  border-radius: 8px;
-  font-size: 13px;
-  font-weight: 600;
-  cursor: pointer;
-  backdrop-filter: blur(4px);
-  z-index: 9999;
-  pointer-events: auto;
+  border-radius: 999px;
+  background: rgba(0, 0, 0, 0.62);
+  color: #fff;
+  font-size: 14px;
+  font-weight: 650;
+  line-height: 1.25;
+  text-align: center;
+  white-space: nowrap;
+  backdrop-filter: blur(10px);
 }
 
-.reset-btn:active {
-  background: rgba(80, 80, 80, 0.9);
+.three-ar__landing {
+  position: fixed;
+  inset: 0;
+  z-index: 5;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  padding: 24px;
+  color: #fff;
+  text-align: center;
+  background: linear-gradient(135deg, #101014 0%, #1b1e2b 100%);
+}
+
+.three-ar__badge {
+  display: grid;
+  width: 72px;
+  height: 72px;
+  margin-bottom: 24px;
+  place-items: center;
+  border: 1px solid rgba(255, 255, 255, 0.16);
+  border-radius: 50%;
+  background: rgba(255, 255, 255, 0.08);
+  font-size: 28px;
+  font-weight: 800;
+}
+
+.three-ar__landing h1 {
+  margin: 0 0 10px;
+  font-size: 28px;
+  line-height: 1.1;
+}
+
+.three-ar__landing p {
+  max-width: 310px;
+  margin: 0 0 34px;
+  color: rgba(255, 255, 255, 0.68);
+  font-size: 15px;
+  line-height: 1.6;
+}
+
+.three-ar__landing button,
+.three-ar__actions button {
+  min-width: 140px;
+  border: 0;
+  border-radius: 999px;
+  cursor: pointer;
+  font-size: 15px;
+  font-weight: 800;
+}
+
+.three-ar__landing button {
+  padding: 15px 34px;
+  background: #fff;
+  color: #000;
+  box-shadow: 0 8px 32px rgba(255, 255, 255, 0.2);
+}
+
+.three-ar__landing button:disabled {
+  cursor: wait;
+  opacity: 0.7;
+}
+
+.three-ar__error {
+  max-width: 320px;
+  margin-top: 18px;
+  color: #ffb4b4;
+  font-size: 13px;
+  line-height: 1.5;
+}
+
+.three-ar__actions {
+  position: fixed;
+  right: 0;
+  bottom: max(28px, env(safe-area-inset-bottom));
+  left: 0;
+  z-index: 6;
+  display: flex;
+  justify-content: center;
+  pointer-events: none;
+}
+
+.three-ar__actions button {
+  padding: 13px 30px;
+  color: #fff;
+  background: rgba(20, 20, 20, 0.82);
+  border: 1px solid rgba(255, 255, 255, 0.24);
+  pointer-events: auto;
+  backdrop-filter: blur(10px);
 }
