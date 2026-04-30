@@ -9,6 +9,7 @@
 
   AFRAME.registerComponent("ar-placement", {
     init() {
+      console.log("[AR-COMPONENT] Initializing ar-placement component");
       this.hitTestSource          = null;
       this.hitTestSourceRequested = false;
       this.isPlaced               = false;
@@ -17,10 +18,13 @@
       const sceneEl  = this.el.sceneEl;
       const renderer = sceneEl.renderer;
 
+      console.log("[AR-COMPONENT] Scene and renderer loaded");
+
       // Get refs after scene entities are ready
       sceneEl.addEventListener("loaded", () => {
         this.reticle = document.getElementById("ar-reticle");
         this.model   = document.getElementById("ar-model");
+        console.log("[AR-COMPONENT] Scene loaded, entities found");
       });
 
       // XR controller tap
@@ -28,9 +32,11 @@
       sceneEl.object3D.add(this._controller);
       this._onSelect = () => this._handleSelect();
       this._controller.addEventListener("select", this._onSelect);
+      console.log("[AR-COMPONENT] XR controller listener added");
 
       // Force camera passthrough every time AR is entered
       sceneEl.addEventListener("enter-vr", () => {
+        console.log("[AR-COMPONENT] enter-vr event fired - setting up camera passthrough");
         renderer.setClearColor(0x000000, 0);
         sceneEl.object3D.background = null;
       });
@@ -70,7 +76,9 @@
         if (sceneEl.object3D.background !== null) sceneEl.object3D.background = null;
       }
 
-      if (!sceneEl.is("ar-mode") || !sceneEl.frame) return;
+      if (!sceneEl.is("ar-mode") || !sceneEl.frame) {
+        return;
+      }
 
       const frame    = sceneEl.frame;
       const renderer = sceneEl.renderer;
@@ -78,11 +86,21 @@
       const refSpace = renderer.xr.getReferenceSpace();
 
       if (!this.hitTestSourceRequested) {
+        console.log("[AR-COMPONENT] Requesting hit-test source");
         session.requestReferenceSpace("viewer")
-          .then(vs => session.requestHitTestSource({ space: vs }))
-          .then(src => { this.hitTestSource = src; })
-          .catch(console.error);
+          .then(vs => {
+            console.log("[AR-COMPONENT] Viewer reference space obtained");
+            return session.requestHitTestSource({ space: vs });
+          })
+          .then(src => {
+            console.log("[AR-COMPONENT] Hit-test source obtained");
+            this.hitTestSource = src;
+          })
+          .catch((err) => {
+            console.error("[AR-COMPONENT] Failed to get hit-test source:", err);
+          });
         session.addEventListener("end", () => {
+          console.log("[AR-COMPONENT] Session ended during hit-test request");
           this.hitTestSourceRequested = false;
           this.hitTestSource          = null;
         });
@@ -98,12 +116,14 @@
         this.reticle.object3D.matrixAutoUpdate = false;
         this.reticle.object3D.matrix.fromArray(pose.transform.matrix);
         if (!this._surfaceReady) {
+          console.log("[AR-COMPONENT] Surface detected!");
           this._surfaceReady = true;
           window.dispatchEvent(new CustomEvent("ar:surface", { detail: true }));
         }
       } else {
         this.reticle.object3D.visible = false;
         if (this._surfaceReady) {
+          console.log("[AR-COMPONENT] Surface lost");
           this._surfaceReady = false;
           window.dispatchEvent(new CustomEvent("ar:surface", { detail: false }));
         }
