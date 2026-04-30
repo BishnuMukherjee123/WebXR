@@ -1,44 +1,20 @@
 import { useEffect, useRef } from "react";
 
-/**
- * AROverlay — In-session heads-up display
- *
- * DOM Overlay spec compliance (https://immersive-web.github.io/dom-overlays):
- *
- * 1. Root element must exist in the DOM BEFORE the XR session starts.
- *    → ARScene always renders the overlay div; we only toggle visibility here.
- *
- * 2. `beforexrselect` event:
- *    Fired on DOM elements when a WebXR "select" (tap) begins.
- *    Calling preventDefault() STOPS the WebXR session from receiving its own
- *    select/selectstart/selectend events.
- *    → We add this to ALL interactive UI elements so tapping a button does NOT
- *      also trigger model placement in the 3D scene.
- *
- * 3. `pointerEvents`:
- *    The overlay root must allow events to reach interactive children.
- *    Non-interactive areas use pointerEvents: none so taps fall through
- *    to the WebXR canvas for model placement.
- */
 export default function AROverlay({ surfaceReady }) {
   const resetBtnRef = useRef(null);
-  const menuBtnRef  = useRef(null);
+  const menuBtnRef = useRef(null);
 
   useEffect(() => {
-    // Attach beforexrselect to each interactive element.
-    // This prevents a button tap from ALSO triggering WebXR model placement.
-    const stopXRSelect = (e) => e.preventDefault();
-
+    const stopSelect = (e) => e.preventDefault();
     const refs = [resetBtnRef, menuBtnRef];
-    refs.forEach((r) => r.current?.addEventListener("beforexrselect", stopXRSelect));
+    refs.forEach((r) => r.current?.addEventListener("beforexrselect", stopSelect));
     return () => {
-      refs.forEach((r) => r.current?.removeEventListener("beforexrselect", stopXRSelect));
+      refs.forEach((r) => r.current?.removeEventListener("beforexrselect", stopSelect));
     };
   }, []);
 
   return (
     <>
-      {/* Scan hint — centred at top, no pointer interaction */}
       <div
         style={{
           position: "absolute",
@@ -53,14 +29,13 @@ export default function AROverlay({ surfaceReady }) {
           fontWeight: 500,
           whiteSpace: "nowrap",
           backdropFilter: "blur(10px)",
-          pointerEvents: "none",   // non-interactive — falls through for surface taps
+          pointerEvents: "none",
           userSelect: "none",
         }}
       >
-        {surfaceReady ? "✦ Surface detected · Tap to place" : "Slowly scan the floor…"}
+        {surfaceReady ? "Marker found" : "Show the Hiro marker"}
       </div>
 
-      {/* Bottom action row — interactive, beforexrselect attached via ref */}
       <div
         style={{
           position: "absolute",
@@ -70,10 +45,9 @@ export default function AROverlay({ surfaceReady }) {
           display: "flex",
           justifyContent: "center",
           gap: 16,
-          pointerEvents: "none",   // container: fall-through
+          pointerEvents: "none",
         }}
       >
-        {/* Reset — pointerEvents: auto makes it tappable */}
         <button
           ref={resetBtnRef}
           onClick={() => window.resetAR?.()}
@@ -91,10 +65,9 @@ export default function AROverlay({ surfaceReady }) {
             WebkitTapHighlightColor: "transparent",
           }}
         >
-          ↺ Reset
+          Reset
         </button>
 
-        {/* Menu — pointerEvents: auto makes it tappable */}
         <button
           ref={menuBtnRef}
           onClick={() => window.dispatchEvent(new CustomEvent("ar:openMenu"))}
@@ -112,7 +85,7 @@ export default function AROverlay({ surfaceReady }) {
             WebkitTapHighlightColor: "transparent",
           }}
         >
-          ☰ Menu
+          Menu
         </button>
       </div>
     </>

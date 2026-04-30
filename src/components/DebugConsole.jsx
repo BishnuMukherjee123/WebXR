@@ -17,15 +17,27 @@ export default function DebugConsole() {
 
     console.log = (...args) => {
       origLog.apply(console, args);
-      try { window.__arConsoleAppend('log', args.map(a => String(a)).join(' ')); } catch (e) {}
+      try {
+        window.__arConsoleAppend('log', args.map(a => String(a)).join(' '));
+      } catch {
+        // Debug mirroring should never break console logging.
+      }
     };
     console.warn = (...args) => {
       origWarn.apply(console, args);
-      try { window.__arConsoleAppend('warn', args.map(a => String(a)).join(' ')); } catch (e) {}
+      try {
+        window.__arConsoleAppend('warn', args.map(a => String(a)).join(' '));
+      } catch {
+        // Debug mirroring should never break console logging.
+      }
     };
     console.error = (...args) => {
       origError.apply(console, args);
-      try { window.__arConsoleAppend('error', args.map(a => String(a)).join(' ')); } catch (e) {}
+      try {
+        window.__arConsoleAppend('error', args.map(a => String(a)).join(' '));
+      } catch {
+        // Debug mirroring should never break console logging.
+      }
     };
 
     return () => {
