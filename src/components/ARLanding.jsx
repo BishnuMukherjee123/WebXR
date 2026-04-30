@@ -152,6 +152,7 @@ export default function ARLanding() {
       background: "linear-gradient(135deg, #0f0f0f 0%, #1a1a2e 100%)",
       display: "flex", flexDirection: "column",
       alignItems: "center", justifyContent: "center",
+      pointerEvents: 'auto',
     }}>
       <div style={{
         width: 72, height: 72, borderRadius: "50%",
