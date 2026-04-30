@@ -1,464 +1,316 @@
 import { useEffect, useRef, useState } from "react";
 import * as THREE from "three";
-import * as ZapparThree from "@zappar/zappar-threejs";
-import { CustomAnchor, TransformOrientation } from "@zappar/zappar";
-import { PlanesMeshes } from "@zappar/zappar-threejs/lib/mesh/planesmeshes.js";
 import { GLTFLoader } from "three/examples/jsm/loaders/GLTFLoader.js";
 import { DRACOLoader } from "three/examples/jsm/loaders/DRACOLoader.js";
 
-const MODEL_BASE_SCALE = 0.8;
 const MODEL_URL = "/models/10.glb";
-
-const DISHES = [{ id: "dish-1", name: "Bong Kebab", url: MODEL_URL }];
+const MODEL_SCALE = 0.8;
 
 export default function ThreeARScene() {
-  const containerRef = useRef(null);
-  const canvasRef = useRef(null);
-  const cleanupRef = useRef(null);
-  const cameraRef = useRef(null);
-  const worldTrackerRef = useRef(null);
-  const planesRef = useRef(null);
-  const customAnchorRef = useRef(null);
-  const anchorGroupRef = useRef(null);
-  const contentRef = useRef(null);
-  const loaderRef = useRef(null);
-  const dracoLoaderRef = useRef(null);
-  const currentModelRef = useRef(null);
-  const pointersRef = useRef(new Map());
-  const gestureRef = useRef({ x: 0, y: 0, distance: 0, scale: 1, placed: false });
-  const placedRef = useRef(false);
-  const [started, setStarted] = useState(false);
-  const [loading, setLoading] = useState(false);
-  const [placed, setPlaced] = useState(false);
-  const [status, setStatus] = useState("Zappar world tracking");
-  const [error, setError] = useState("");
-
-  async function startAR() {
-    setError("");
-    setLoading(true);
-
-    try {
-      if (ZapparThree.browserIncompatible()) {
-        throw new Error("This browser does not support Zappar world tracking. Open this link in Safari or Chrome on your phone.");
-      }
-
-      ZapparThree.setPreferWebXRCamera(false);
-      const granted = await ZapparThree.permissionRequest();
-      if (!granted) {
-        throw new Error("Camera or motion permission was denied.");
-      }
-
-      const cleanup = await initZapparWorldTracking();
-      cleanupRef.current = cleanup;
-      setStarted(true);
-      setStatus("Move slowly until surfaces appear, then tap the floor/table.");
-      console.log("[ZapparAR] World tracking started");
-    } catch (err) {
-      console.error("[ZapparAR] Start failed", err);
-      setError(err?.message || "Could not start Zappar AR.");
-    } finally {
-      setLoading(false);
-    }
-  }
-
-  async function initZapparWorldTracking() {
-    const container = containerRef.current;
-    const canvas = canvasRef.current;
-    const renderer = new THREE.WebGLRenderer({
-      canvas,
-      alpha: false,
-      antialias: true,
-      powerPreference: "high-performance",
-    });
-    renderer.setPixelRatio(Math.min(window.devicePixelRatio || 1, 2));
-    renderer.outputColorSpace = THREE.SRGBColorSpace;
-    renderer.shadowMap.enabled = true;
-    renderer.shadowMap.type = THREE.PCFShadowMap;
-
-    ZapparThree.glContextSet(renderer.getContext());
-
-    const scene = new THREE.Scene();
-    const camera = new ZapparThree.Camera({ zNear: 0.01, zFar: 100 });
-    camera.profile = ZapparThree.CameraProfile.High;
-    scene.background = camera.backgroundTexture;
-    cameraRef.current = camera;
-
-    const worldTracker = new ZapparThree.WorldTracker();
-    worldTracker.horizontalPlaneDetectionEnabled = true;
-    worldTracker.verticalPlaneDetectionEnabled = false;
-    worldTrackerRef.current = worldTracker;
-    const trackingUI = new ZapparThree.WorldTrackerUI(canvas);
-    trackingUI.setText("Move your phone slowly left and right");
-
-    const customAnchor = new CustomAnchor(worldTracker);
-    customAnchorRef.current = customAnchor;
-
-    const anchorGroup = new THREE.Group();
-    anchorGroup.matrixAutoUpdate = false;
-    anchorGroup.visible = false;
-    scene.add(anchorGroup);
-    anchorGroupRef.current = anchorGroup;
-
-    const content = new THREE.Group();
-    anchorGroup.add(content);
-    contentRef.current = content;
-
-    const planes = new PlanesMeshes(camera, worldTracker, {
-      color: 0xffffff,
-      transparent: true,
-      opacity: 0.14,
-      side: THREE.DoubleSide,
-      depthWrite: false,
-    });
-    planes.visible = true;
-    scene.add(planes);
-    planesRef.current = planes;
-
-    const ambient = new THREE.HemisphereLight(0xffffff, 0x808080, 1.15);
-    scene.add(ambient);
-
-    const key = new THREE.DirectionalLight(0xffffff, 2.1);
-    key.position.set(1.5, 3.2, 1.5);
-    key.castShadow = true;
-    key.shadow.mapSize.set(1024, 1024);
-    key.shadow.camera.near = 0.1;
-    key.shadow.camera.far = 8;
-    key.shadow.camera.left = -3;
-    key.shadow.camera.right = 3;
-    key.shadow.camera.top = 3;
-    key.shadow.camera.bottom = -3;
-    key.shadow.bias = -0.0007;
-    scene.add(key);
-    key.target = content;
-
-    const fill = new THREE.DirectionalLight(0xffffff, 0.6);
-    fill.position.set(-2, 1.2, 1);
-    scene.add(fill);
-
-    const shadowCatcher = new THREE.Mesh(
-      new THREE.PlaneGeometry(5, 5),
-      new THREE.ShadowMaterial({ opacity: 0.42 }),
-    );
-    shadowCatcher.rotation.x = -Math.PI / 2;
-    shadowCatcher.receiveShadow = true;
-    content.add(shadowCatcher);
-
-    dracoLoaderRef.current = new DRACOLoader();
-    dracoLoaderRef.current.setDecoderPath("/draco/gltf/");
-    dracoLoaderRef.current.setDecoderConfig({ type: "wasm" });
-
-    loaderRef.current = new GLTFLoader();
-    loaderRef.current.setDRACOLoader(dracoLoaderRef.current);
-    await loadDish(DISHES[0]);
-
-    function resize() {
-      const width = container.clientWidth || window.innerWidth;
-      const height = container.clientHeight || window.innerHeight;
-      renderer.setSize(width, height, false);
-    }
-
-    let rafId = 0;
-    function render() {
-      rafId = requestAnimationFrame(render);
-      camera.updateFrame(renderer);
-      updateTrackingUI(trackingUI, worldTracker);
-      updatePlacedAnchor(camera);
-      renderer.render(scene, camera);
-    }
-
-    resize();
-    window.addEventListener("resize", resize);
-    camera.start(false);
-    render();
-
-    return () => {
-      cancelAnimationFrame(rafId);
-      window.removeEventListener("resize", resize);
-      camera.stop();
-      camera.dispose();
-      trackingUI.hide();
-      trackingUI.dom?.remove();
-      customAnchor.destroy();
-      worldTracker.destroy();
-      disposeWorld(scene);
-      dracoLoaderRef.current?.dispose();
-      renderer.dispose();
-      cameraRef.current = null;
-      worldTrackerRef.current = null;
-      planesRef.current = null;
-      customAnchorRef.current = null;
-      anchorGroupRef.current = null;
-      contentRef.current = null;
-      loaderRef.current = null;
-      dracoLoaderRef.current = null;
-      currentModelRef.current = null;
-      placedRef.current = false;
-    };
-  }
-
-  function updateTrackingUI(trackingUI, worldTracker) {
-    if (placedRef.current) {
-      trackingUI.hide();
-      return;
-    }
-
-    const hasTrackedPlane = [...worldTracker.planes.values()].some(
-      (plane) => plane.status === ZapparThree.AnchorStatus.ANCHOR_STATUS_TRACKING,
-    );
-
-    if (hasTrackedPlane || worldTracker.groundAnchor.status !== ZapparThree.AnchorStatus.ANCHOR_STATUS_STOPPED) {
-      trackingUI.hide();
-      return;
-    }
-
-    trackingUI.show();
-    trackingUI.update();
-  }
-
-  async function loadDish(dish) {
-    const content = contentRef.current;
-    const loader = loaderRef.current;
-    if (!content || !loader) return;
-
-    setStatus(`Loading ${dish.name}...`);
-
-    try {
-      if (currentModelRef.current) {
-        content.remove(currentModelRef.current);
-        disposeObject(currentModelRef.current);
-        currentModelRef.current = null;
-      }
-
-      const gltf = await loader.loadAsync(dish.url);
-      const model = gltf.scene;
-      normalizeModel(model);
-      model.position.set(0, 0, 0);
-      model.scale.setScalar(MODEL_BASE_SCALE);
-      model.traverse((child) => {
-        if (!child.isMesh) return;
-        child.castShadow = true;
-        child.receiveShadow = false;
-        if (child.material) child.material.needsUpdate = true;
-      });
-      content.add(model);
-      currentModelRef.current = model;
-      setStatus("Move slowly until surfaces appear, then tap the floor/table.");
-    } catch (err) {
-      console.error("[ZapparAR] Dish load failed", err);
-      setStatus(`Could not load ${dish.name}.`);
-    }
-  }
-
-  function normalizeModel(model) {
-    const box = new THREE.Box3().setFromObject(model);
-    const size = box.getSize(new THREE.Vector3());
-    const maxAxis = Math.max(size.x, size.y, size.z) || 1;
-    model.scale.setScalar(1.25 / maxAxis);
-    model.updateWorldMatrix(true, true);
-
-    const scaledBox = new THREE.Box3().setFromObject(model);
-    const scaledCenter = scaledBox.getCenter(new THREE.Vector3());
-    model.position.x -= scaledCenter.x;
-    model.position.z -= scaledCenter.z;
-    model.position.y -= scaledBox.min.y;
-  }
-
-  function updatePlacedAnchor(camera) {
-    const anchorGroup = anchorGroupRef.current;
-    const customAnchor = customAnchorRef.current;
-    if (!anchorGroup || !customAnchor || !placedRef.current) return;
-
-    anchorGroup.matrix.fromArray(
-      customAnchor.pose(camera.rawPose, camera.currentMirrorMode === ZapparThree.CameraMirrorMode.Poses),
-    );
-    anchorGroup.matrix.decompose(anchorGroup.position, anchorGroup.quaternion, anchorGroup.scale);
-    anchorGroup.visible = customAnchor.status === ZapparThree.AnchorStatus.ANCHOR_STATUS_TRACKING;
-  }
-
-  function placeAtScreenPoint(clientX, clientY) {
-    const canvas = canvasRef.current;
-    const camera = cameraRef.current;
-    const planes = planesRef.current;
-    const worldTracker = worldTrackerRef.current;
-    const customAnchor = customAnchorRef.current;
-    const anchorGroup = anchorGroupRef.current;
-    if (!canvas || !camera || !planes || !worldTracker || !customAnchor || !anchorGroup) return;
-
-    const rect = canvas.getBoundingClientRect();
-    const pointer = new THREE.Vector2(
-      ((clientX - rect.left) / rect.width) * 2 - 1,
-      -(((clientY - rect.top) / rect.height) * 2 - 1),
-    );
-
-    camera.updateMatrixWorld();
-    const raycaster = new THREE.Raycaster();
-    raycaster.setFromCamera(pointer, camera);
-
-    const planeHit = planes.intersect(raycaster)[0];
-    if (planeHit) {
-      const local = planeHit.intersection.point.clone();
-      planeHit.intersection.object.worldToLocal(local);
-      customAnchor.setPoseFromAnchorOffset(
-        planeHit.anchorId,
-        local.x,
-        local.y,
-        local.z,
-        TransformOrientation.Z_TOWARDS_CAMERA,
-      );
-      finishPlacement();
-      return;
-    }
-
-    if (worldTracker.groundAnchor.status !== ZapparThree.AnchorStatus.ANCHOR_STATUS_STOPPED) {
-      const groundMatrix = new THREE.Matrix4().fromArray(
-        worldTracker.groundAnchor.pose(camera.rawPose, camera.currentMirrorMode === ZapparThree.CameraMirrorMode.Poses),
-      );
-      const groundPlane = new THREE.Plane(new THREE.Vector3(0, 1, 0), 0).applyMatrix4(groundMatrix);
-      const point = new THREE.Vector3();
-      if (raycaster.ray.intersectPlane(groundPlane, point)) {
-        const local = point.clone().applyMatrix4(groundMatrix.clone().invert());
-        customAnchor.setPoseFromAnchorOffset(
-          worldTracker.groundAnchor,
-          local.x,
-          local.y,
-          local.z,
-          TransformOrientation.Z_TOWARDS_CAMERA,
-        );
-        finishPlacement();
-        return;
-      }
-    }
-
-    setStatus("No tracked surface at that tap yet. Move slowly and tap the visible floor/table mesh.");
-  }
-
-  function finishPlacement() {
-    placedRef.current = true;
-    anchorGroupRef.current.visible = true;
-    planesRef.current.visible = false;
-    setPlaced(true);
-    setStatus("Placed on tracked surface. Move your phone around it; drag to rotate, pinch to resize.");
-    console.log("[ZapparAR] Model anchored to tracked surface");
-  }
-
-  function resetModel() {
-    const anchorGroup = anchorGroupRef.current;
-    const content = contentRef.current;
-    const planes = planesRef.current;
-    if (!anchorGroup || !content || !planes) return;
-    placedRef.current = false;
-    anchorGroup.visible = false;
-    content.rotation.set(0, 0, 0);
-    content.scale.setScalar(1);
-    planes.visible = true;
-    setPlaced(false);
-    setStatus("Move slowly until surfaces appear, then tap the floor/table.");
-  }
-
-  function onPointerDown(event) {
-    event.currentTarget.setPointerCapture(event.pointerId);
-    pointersRef.current.set(event.pointerId, { x: event.clientX, y: event.clientY });
-    const points = [...pointersRef.current.values()];
-    gestureRef.current = {
-      x: event.clientX,
-      y: event.clientY,
-      distance: points.length >= 2 ? distance(points[0], points[1]) : 0,
-      scale: contentRef.current?.scale.x || 1,
-      placed: placedRef.current,
-    };
-  }
-
-  function onPointerMove(event) {
-    const content = contentRef.current;
-    if (!content || !pointersRef.current.has(event.pointerId) || !placedRef.current) return;
-
-    pointersRef.current.set(event.pointerId, { x: event.clientX, y: event.clientY });
-    const points = [...pointersRef.current.values()];
-
-    if (points.length >= 2) {
-      const nextDistance = distance(points[0], points[1]);
-      const startDistance = gestureRef.current.distance || nextDistance;
-      const nextScale = THREE.MathUtils.clamp(
-        gestureRef.current.scale * (nextDistance / startDistance),
-        0.45,
-        1.8,
-      );
-      content.scale.setScalar(nextScale);
-      return;
-    }
-
-    const dx = event.clientX - gestureRef.current.x;
-    content.rotation.y += dx * 0.01;
-    gestureRef.current.x = event.clientX;
-    gestureRef.current.y = event.clientY;
-  }
-
-  function onPointerUp(event) {
-    const pointer = pointersRef.current.get(event.pointerId);
-    pointersRef.current.delete(event.pointerId);
-
-    if (!pointer || gestureRef.current.placed || pointersRef.current.size > 0) return;
-
-    const move = Math.hypot(event.clientX - pointer.x, event.clientY - pointer.y);
-    if (move < 8) placeAtScreenPoint(event.clientX, event.clientY);
-  }
-
-  useEffect(() => {
-    return () => cleanupRef.current?.();
-  }, []);
+  const [mode, setMode] = useState("home");
 
   return (
-    <div ref={containerRef} className="three-ar">
-      <canvas
-        ref={canvasRef}
-        className="three-ar__canvas"
-        onPointerDown={onPointerDown}
-        onPointerMove={onPointerMove}
-        onPointerUp={onPointerUp}
-        onPointerCancel={onPointerUp}
-      />
-
-      <div className="three-ar__hud">
-        <div className="three-ar__pill">{started ? status : "Zappar world tracking"}</div>
-      </div>
-
-      {!started && (
-        <div className="three-ar__landing">
-          <div className="three-ar__badge">AR</div>
-          <h1>Aroma AR</h1>
-          <p>Open the browser camera, scan the floor, then tap the tracked surface to place the dish.</p>
-          <button onClick={startAR} disabled={loading}>
-            {loading ? "Starting..." : "Launch AR"}
-          </button>
-          {error && <div className="three-ar__error">{error}</div>}
-        </div>
-      )}
-
-      {started && (
-        <div className="three-ar__actions">
-          <button onClick={resetModel} disabled={!placed}>
-            Reset
-          </button>
-        </div>
-      )}
+    <div className="ar-app">
+      {mode === "home" && <HomeScreen onMode={setMode} />}
+      {mode === "webxr" && <WebXRSurfaceMode onBack={() => setMode("home")} />}
+      {mode === "native" && <NativeModelViewerMode onBack={() => setMode("home")} />}
+      {mode === "marker" && <MarkerARMode onBack={() => setMode("home")} />}
     </div>
   );
 }
 
+function HomeScreen({ onMode }) {
+  return (
+    <div className="ar-home">
+      <div className="ar-home__badge">AR</div>
+      <h1>Aroma AR</h1>
+      <p>Choose a free AR mode. Surface AR stays in browser on Android Chrome; native AR works wider but opens the phone viewer.</p>
+
+      <div className="ar-mode-list">
+        <button className="ar-mode-card is-primary" onClick={() => onMode("webxr")}>
+          <span>Browser Surface AR</span>
+          <small>Free WebXR hit-test. Best on Android Chrome.</small>
+        </button>
+        <button className="ar-mode-card" onClick={() => onMode("native")}>
+          <span>Native Surface AR</span>
+          <small>Uses model-viewer. May open Scene Viewer or Quick Look.</small>
+        </button>
+        <button className="ar-mode-card" onClick={() => onMode("marker")}>
+          <span>Browser Marker AR</span>
+          <small>Stays in page with AR.js. Needs the Hiro marker.</small>
+        </button>
+      </div>
+    </div>
+  );
+}
+
+function WebXRSurfaceMode({ onBack }) {
+  const canvasRef = useRef(null);
+  const cleanupRef = useRef(null);
+  const modelRef = useRef(null);
+  const reticleRef = useRef(null);
+  const [status, setStatus] = useState("Checking WebXR support...");
+  const [starting, setStarting] = useState(false);
+  const [supported, setSupported] = useState(false);
+
+  useEffect(() => {
+    let active = true;
+    async function checkSupport() {
+      const ok = Boolean(navigator.xr && (await navigator.xr.isSessionSupported("immersive-ar")));
+      if (active) {
+        setSupported(ok);
+        setStatus(ok ? "Tap Start, scan the floor, then tap when the ring appears." : "WebXR surface AR is not supported in this browser.");
+      }
+    }
+    checkSupport().catch((err) => {
+      console.error("[WebXR] Support check failed", err);
+      if (active) setStatus("Could not check WebXR support.");
+    });
+    return () => {
+      active = false;
+      cleanupRef.current?.();
+    };
+  }, []);
+
+  async function startWebXR() {
+    if (!supported || starting) return;
+    setStarting(true);
+    setStatus("Starting WebXR...");
+
+    try {
+      const cleanup = await initWebXR(canvasRef.current, setStatus, modelRef, reticleRef);
+      cleanupRef.current = cleanup;
+      setStatus("Move slowly. Tap the floor when the ring appears.");
+      console.log("[WebXR] Surface mode started");
+    } catch (err) {
+      console.error("[WebXR] Start failed", err);
+      setStatus(err?.message || "Could not start WebXR AR.");
+      setStarting(false);
+    }
+  }
+
+  function resetPlacement() {
+    if (modelRef.current) modelRef.current.visible = false;
+    setStatus("Move slowly. Tap the floor when the ring appears.");
+  }
+
+  return (
+    <div className="ar-stage">
+      <canvas ref={canvasRef} className="ar-stage__canvas" />
+      <div className="ar-topbar">
+        <button onClick={onBack}>Back</button>
+        <div>{status}</div>
+      </div>
+      <div className="ar-actions">
+        {!starting && (
+          <button onClick={startWebXR} disabled={!supported}>
+            Start Surface AR
+          </button>
+        )}
+        {starting && <button onClick={resetPlacement}>Reset</button>}
+      </div>
+    </div>
+  );
+}
+
+async function initWebXR(canvas, setStatus, modelRef, reticleRef) {
+  const renderer = new THREE.WebGLRenderer({
+    canvas,
+    alpha: true,
+    antialias: true,
+    powerPreference: "high-performance",
+  });
+  renderer.xr.enabled = true;
+  renderer.setPixelRatio(Math.min(window.devicePixelRatio || 1, 2));
+  renderer.setSize(window.innerWidth, window.innerHeight, false);
+  renderer.outputColorSpace = THREE.SRGBColorSpace;
+
+  const scene = new THREE.Scene();
+  const camera = new THREE.PerspectiveCamera();
+
+  scene.add(new THREE.HemisphereLight(0xffffff, 0x808080, 1.2));
+  const light = new THREE.DirectionalLight(0xffffff, 2);
+  light.position.set(1.4, 3, 1.6);
+  scene.add(light);
+
+  const model = await loadModel();
+  model.visible = false;
+  scene.add(model);
+  modelRef.current = model;
+
+  const reticle = new THREE.Mesh(
+    new THREE.RingGeometry(0.08, 0.105, 32).rotateX(-Math.PI / 2),
+    new THREE.MeshBasicMaterial({ color: 0xffffff }),
+  );
+  reticle.matrixAutoUpdate = false;
+  reticle.visible = false;
+  scene.add(reticle);
+  reticleRef.current = reticle;
+
+  const session = await navigator.xr.requestSession("immersive-ar", {
+    requiredFeatures: ["hit-test"],
+    optionalFeatures: ["dom-overlay"],
+    domOverlay: { root: document.body },
+  });
+  renderer.xr.setReferenceSpaceType("local");
+  await renderer.xr.setSession(session);
+
+  const referenceSpace = await session.requestReferenceSpace("local");
+  const viewerSpace = await session.requestReferenceSpace("viewer");
+  const hitTestSource = await session.requestHitTestSource({ space: viewerSpace });
+
+  function resize() {
+    renderer.setSize(window.innerWidth, window.innerHeight, false);
+  }
+
+  function placeModel() {
+    if (!reticle.visible) {
+      setStatus("No floor hit yet. Move slowly and aim at a textured surface.");
+      return;
+    }
+    model.position.setFromMatrixPosition(reticle.matrix);
+    model.quaternion.setFromRotationMatrix(reticle.matrix);
+    model.visible = true;
+    setStatus("Placed. Move your phone around the dish.");
+    console.log("[WebXR] Model placed on hit-test surface");
+  }
+
+  session.addEventListener("select", placeModel);
+  window.addEventListener("resize", resize);
+
+  renderer.setAnimationLoop((_, frame) => {
+    if (frame) {
+      const hits = frame.getHitTestResults(hitTestSource);
+      if (hits.length > 0) {
+        const pose = hits[0].getPose(referenceSpace);
+        reticle.visible = true;
+        reticle.matrix.fromArray(pose.transform.matrix);
+      } else {
+        reticle.visible = false;
+      }
+    }
+    renderer.render(scene, camera);
+  });
+
+  return () => {
+    renderer.setAnimationLoop(null);
+    window.removeEventListener("resize", resize);
+    session.removeEventListener("select", placeModel);
+    hitTestSource.cancel?.();
+    if (session.end) session.end().catch(() => {});
+    disposeWorld(scene);
+    renderer.dispose();
+    modelRef.current = null;
+    reticleRef.current = null;
+  };
+}
+
+function NativeModelViewerMode({ onBack }) {
+  const [scriptReady, setScriptReady] = useState(Boolean(customElements.get("model-viewer")));
+
+  useEffect(() => {
+    if (customElements.get("model-viewer")) {
+      return undefined;
+    }
+
+    const script = document.createElement("script");
+    script.type = "module";
+    script.src = "https://unpkg.com/@google/model-viewer/dist/model-viewer.min.js";
+    script.onload = () => setScriptReady(true);
+    script.onerror = () => console.error("[model-viewer] Could not load model-viewer script");
+    document.head.appendChild(script);
+    return () => {};
+  }, []);
+
+  return (
+    <div className="native-viewer">
+      <div className="ar-topbar">
+        <button onClick={onBack}>Back</button>
+        <div>Native Surface AR</div>
+      </div>
+      {scriptReady ? (
+        <model-viewer
+          src={MODEL_URL}
+          alt="Bong Kebab"
+          ar
+          ar-modes="webxr scene-viewer quick-look"
+          camera-controls
+          auto-rotate
+          shadow-intensity="1"
+          exposure="1"
+          className="native-viewer__model"
+        >
+          <button slot="ar-button" className="native-viewer__ar-button">
+            View in AR
+          </button>
+        </model-viewer>
+      ) : (
+        <div className="native-viewer__loading">Loading native AR viewer...</div>
+      )}
+      <div className="native-viewer__note">
+        Android opens Scene Viewer. iPhone AR needs a USDZ file for best Quick Look support.
+      </div>
+    </div>
+  );
+}
+
+function MarkerARMode({ onBack }) {
+  return (
+    <div className="marker-mode">
+      <iframe title="AR.js marker mode" src="/marker-ar.html" allow="camera; fullscreen; xr-spatial-tracking" />
+      <div className="ar-topbar">
+        <button onClick={onBack}>Back</button>
+        <div>Point camera at the Hiro marker</div>
+      </div>
+      <a className="marker-mode__marker" href="https://raw.githubusercontent.com/AR-js-org/AR.js/master/data/images/hiro.png" target="_blank" rel="noreferrer">
+        Open Hiro marker
+      </a>
+    </div>
+  );
+}
+
+async function loadModel() {
+  const dracoLoader = new DRACOLoader();
+  dracoLoader.setDecoderPath("/draco/gltf/");
+  dracoLoader.setDecoderConfig({ type: "wasm" });
+
+  const loader = new GLTFLoader();
+  loader.setDRACOLoader(dracoLoader);
+  const gltf = await loader.loadAsync(MODEL_URL);
+  dracoLoader.dispose();
+
+  const model = gltf.scene;
+  normalizeModel(model);
+  model.scale.setScalar(MODEL_SCALE);
+  model.traverse((child) => {
+    if (!child.isMesh) return;
+    child.castShadow = true;
+    child.receiveShadow = true;
+    if (child.material) child.material.needsUpdate = true;
+  });
+  return model;
+}
+
+function normalizeModel(model) {
+  const box = new THREE.Box3().setFromObject(model);
+  const size = box.getSize(new THREE.Vector3());
+  const maxAxis = Math.max(size.x, size.y, size.z) || 1;
+  model.scale.setScalar(1.25 / maxAxis);
+  model.updateWorldMatrix(true, true);
+
+  const scaledBox = new THREE.Box3().setFromObject(model);
+  const scaledCenter = scaledBox.getCenter(new THREE.Vector3());
+  model.position.x -= scaledCenter.x;
+  model.position.z -= scaledCenter.z;
+  model.position.y -= scaledBox.min.y;
+}
+
 function disposeWorld(scene) {
   scene.traverse((obj) => {
-    disposeObject(obj);
+    if (obj.geometry) obj.geometry.dispose();
+    if (obj.material) {
+      const materials = Array.isArray(obj.material) ? obj.material : [obj.material];
+      materials.forEach((mat) => mat.dispose());
+    }
   });
-}
-
-function disposeObject(obj) {
-  if (obj.geometry) obj.geometry.dispose();
-  if (obj.material) {
-    const materials = Array.isArray(obj.material) ? obj.material : [obj.material];
-    materials.forEach((mat) => mat.dispose());
-  }
-}
-
-function distance(a, b) {
-  return Math.hypot(a.x - b.x, a.y - b.y);
 }

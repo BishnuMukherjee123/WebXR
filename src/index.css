@@ -9,7 +9,7 @@ body,
   height: 100%;
   margin: 0;
   overflow: hidden;
-  background: #000;
+  background: #050505;
   font-family: system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
 }
 
@@ -17,192 +17,225 @@ button {
   font: inherit;
 }
 
-.three-ar {
+.ar-app,
+.ar-home,
+.ar-stage,
+.native-viewer,
+.marker-mode {
   position: fixed;
   inset: 0;
   overflow: hidden;
-  background: #000;
-  touch-action: none;
-}
-
-.three-ar__video,
-.three-ar__canvas {
-  position: fixed;
-  inset: 0;
-  width: 100vw;
-  height: 100vh;
-}
-
-.three-ar__video {
-  z-index: 1;
-  object-fit: cover;
-  background: #000;
-}
-
-.three-ar__canvas {
-  z-index: 2;
-  display: block;
-  background: transparent;
-  touch-action: none;
-}
-
-.three-ar__hud {
-  position: fixed;
-  inset: 0;
-  z-index: 4;
-  pointer-events: none;
-}
-
-.three-ar__pill {
-  position: absolute;
-  top: max(18px, env(safe-area-inset-top));
-  left: 50%;
-  transform: translateX(-50%);
-  max-width: calc(100vw - 32px);
-  padding: 8px 18px;
-  border-radius: 999px;
-  background: rgba(0, 0, 0, 0.62);
+  background: #050505;
   color: #fff;
-  font-size: 14px;
-  font-weight: 650;
-  line-height: 1.25;
-  text-align: center;
-  white-space: nowrap;
-  backdrop-filter: blur(10px);
 }
 
-.three-ar__landing {
-  position: fixed;
-  inset: 0;
-  z-index: 5;
+.ar-home {
   display: flex;
   flex-direction: column;
   align-items: center;
   justify-content: center;
   padding: 24px;
-  color: #fff;
   text-align: center;
-  background: linear-gradient(135deg, #101014 0%, #1b1e2b 100%);
+  background:
+    radial-gradient(circle at 50% 0%, rgba(255, 255, 255, 0.1), transparent 34%),
+    linear-gradient(140deg, #0b0e10 0%, #181818 54%, #220f11 100%);
 }
 
-.three-ar__badge {
+.ar-home__badge {
   display: grid;
   width: 72px;
   height: 72px;
-  margin-bottom: 24px;
+  margin-bottom: 22px;
   place-items: center;
-  border: 1px solid rgba(255, 255, 255, 0.16);
+  border: 1px solid rgba(255, 255, 255, 0.18);
   border-radius: 50%;
   background: rgba(255, 255, 255, 0.08);
   font-size: 28px;
-  font-weight: 800;
+  font-weight: 850;
 }
 
-.three-ar__landing h1 {
+.ar-home h1 {
   margin: 0 0 10px;
-  font-size: 28px;
+  font-size: 30px;
   line-height: 1.1;
 }
 
-.three-ar__landing p {
-  max-width: 310px;
-  margin: 0 0 34px;
-  color: rgba(255, 255, 255, 0.68);
+.ar-home p {
+  max-width: 380px;
+  margin: 0 0 26px;
+  color: rgba(255, 255, 255, 0.72);
   font-size: 15px;
-  line-height: 1.6;
+  line-height: 1.55;
 }
 
-.three-ar__landing button,
-.three-ar__actions button {
-  min-width: 140px;
-  border: 0;
-  border-radius: 999px;
+.ar-mode-list {
+  display: grid;
+  width: min(420px, 100%);
+  gap: 10px;
+}
+
+.ar-mode-card {
+  display: grid;
+  gap: 5px;
+  width: 100%;
+  padding: 15px 16px;
+  border: 1px solid rgba(255, 255, 255, 0.16);
+  border-radius: 8px;
+  color: #fff;
+  background: rgba(255, 255, 255, 0.08);
   cursor: pointer;
-  font-size: 15px;
-  font-weight: 800;
+  text-align: left;
 }
 
-.three-ar__landing button {
-  padding: 15px 34px;
+.ar-mode-card.is-primary {
+  color: #111;
   background: #fff;
-  color: #000;
-  box-shadow: 0 8px 32px rgba(255, 255, 255, 0.2);
 }
 
-.three-ar__landing button:disabled {
-  cursor: wait;
-  opacity: 0.7;
+.ar-mode-card span {
+  font-size: 15px;
+  font-weight: 850;
 }
 
-.three-ar__error {
-  max-width: 320px;
-  margin-top: 18px;
-  color: #ffb4b4;
-  font-size: 13px;
-  line-height: 1.5;
+.ar-mode-card small {
+  color: currentColor;
+  font-size: 12px;
+  line-height: 1.35;
+  opacity: 0.72;
 }
 
-.three-ar__actions {
+.ar-stage__canvas {
   position: fixed;
-  right: 0;
-  bottom: max(28px, env(safe-area-inset-bottom));
-  left: 0;
-  z-index: 6;
-  display: flex;
-  justify-content: center;
+  inset: 0;
+  width: 100vw;
+  height: 100vh;
+  touch-action: none;
+}
+
+.ar-topbar {
+  position: fixed;
+  top: max(14px, env(safe-area-inset-top));
+  right: 12px;
+  left: 12px;
+  z-index: 12;
+  display: grid;
+  grid-template-columns: auto 1fr;
+  gap: 10px;
+  align-items: center;
   pointer-events: none;
 }
 
-.three-ar__actions button {
-  padding: 13px 30px;
-  color: #fff;
-  background: rgba(20, 20, 20, 0.82);
-  border: 1px solid rgba(255, 255, 255, 0.24);
+.ar-topbar button,
+.ar-actions button,
+.native-viewer__ar-button {
+  border: 0;
+  border-radius: 999px;
+  cursor: pointer;
+  font-size: 14px;
+  font-weight: 850;
+}
+
+.ar-topbar button {
+  padding: 9px 14px;
+  color: #111;
+  background: #fff;
   pointer-events: auto;
-  backdrop-filter: blur(10px);
 }
 
-.three-ar__dish-rail {
-  position: fixed;
-  right: 0;
-  bottom: calc(max(28px, env(safe-area-inset-bottom)) + 62px);
-  left: 0;
-  z-index: 6;
-  display: flex;
-  gap: 8px;
-  padding: 0 14px 2px;
-  overflow-x: auto;
-  pointer-events: auto;
-  scrollbar-width: none;
-}
-
-.three-ar__dish-rail::-webkit-scrollbar {
-  display: none;
-}
-
-.three-ar__dish-rail button {
-  flex: 0 0 auto;
-  max-width: 138px;
-  min-width: 84px;
-  padding: 10px 13px;
+.ar-topbar div {
+  min-width: 0;
+  padding: 9px 14px;
   overflow: hidden;
-  border: 1px solid rgba(255, 255, 255, 0.24);
   border-radius: 999px;
   color: #fff;
-  background: rgba(20, 20, 20, 0.76);
+  background: rgba(0, 0, 0, 0.68);
   font-size: 13px;
-  font-weight: 750;
+  font-weight: 700;
+  text-align: center;
   text-overflow: ellipsis;
   white-space: nowrap;
   backdrop-filter: blur(10px);
 }
 
-.three-ar__dish-rail button.is-active {
-  color: #000;
-  background: #fff;
-  border-color: #fff;
+.ar-actions {
+  position: fixed;
+  right: 0;
+  bottom: max(26px, env(safe-area-inset-bottom));
+  left: 0;
+  z-index: 12;
+  display: flex;
+  justify-content: center;
+  pointer-events: none;
 }
 
-.three-ar__dish-rail button:disabled {
-  opacity: 0.65;
+.ar-actions button {
+  min-width: 160px;
+  padding: 14px 24px;
+  color: #111;
+  background: #fff;
+  pointer-events: auto;
+}
+
+.ar-actions button:disabled {
+  cursor: not-allowed;
+  opacity: 0.55;
+}
+
+.native-viewer {
+  display: grid;
+  grid-template-rows: 1fr auto;
+}
+
+.native-viewer__model {
+  width: 100%;
+  height: 100%;
+  background: #101214;
+}
+
+.native-viewer__ar-button {
+  position: absolute;
+  right: 0;
+  bottom: 28px;
+  left: 0;
+  width: max-content;
+  min-width: 150px;
+  margin: auto;
+  padding: 14px 24px;
+  color: #111;
+  background: #fff;
+}
+
+.native-viewer__loading,
+.native-viewer__note {
+  display: grid;
+  place-items: center;
+  padding: 18px;
+  color: rgba(255, 255, 255, 0.72);
+  text-align: center;
+}
+
+.native-viewer__note {
+  min-height: 62px;
+  background: #101214;
+  font-size: 13px;
+}
+
+.marker-mode iframe {
+  width: 100%;
+  height: 100%;
+  border: 0;
+}
+
+.marker-mode__marker {
+  position: fixed;
+  right: 16px;
+  bottom: max(24px, env(safe-area-inset-bottom));
+  z-index: 14;
+  padding: 12px 18px;
+  border-radius: 999px;
+  color: #111;
+  background: #fff;
+  font-size: 14px;
+  font-weight: 850;
+  text-decoration: none;
 }
