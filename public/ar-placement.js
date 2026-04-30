@@ -16,7 +16,6 @@
       this.model = null;
       this.inSession = false;
       this.previewStream = null;
-      this.previewTexture = null;
       this.videoStyleTimer = null;
 
       this.sceneEl.addEventListener("loaded", () => {
@@ -40,7 +39,7 @@
         });
 
         console.log("[AR.js] Scene loaded");
-        this._syncRendererCameraBackground();
+        this._forceTransparentRenderer();
       });
 
       this.sceneEl.addEventListener("camera-init", () => {
@@ -58,11 +57,11 @@
         this.inSession = true;
         document.body.classList.add("arjs-running");
         await this._startPreviewVideo();
-        this._syncRendererCameraBackground();
+        this._forceTransparentRenderer();
         this._syncCameraVideoStyles();
         this.videoStyleTimer = window.setInterval(() => {
           this._syncCameraVideoStyles();
-          this._syncRendererCameraBackground();
+          this._forceTransparentRenderer();
         }, 500);
         window.setTimeout(() => {
           if (!document.querySelector("#arjs-video, video")) {
@@ -86,7 +85,7 @@
     },
 
     tick() {
-      if (this.inSession) this._syncRendererCameraBackground();
+      if (this.inSession) this._forceTransparentRenderer();
     },
 
     async _startPreviewVideo() {
@@ -128,36 +127,14 @@
       }
     },
 
-    _syncRendererCameraBackground() {
+    _forceTransparentRenderer() {
       const renderer = this.sceneEl && this.sceneEl.renderer;
       const scene = this.sceneEl && this.sceneEl.object3D;
-      const THREE = AFRAME.THREE;
-      if (!renderer || !scene || !THREE) return;
-
-      const video = document.getElementById("camera-preview") || document.getElementById("arjs-video");
-      if (!video || video.readyState < 2) {
-        renderer.setClearColor(0x000000, 0);
-        renderer.setClearAlpha(0);
-        return;
-      }
-
-      if (!this.previewTexture || this.previewTexture.image !== video) {
-        if (this.previewTexture) this.previewTexture.dispose();
-        this.previewTexture = new THREE.VideoTexture(video);
-        this.previewTexture.minFilter = THREE.LinearFilter;
-        this.previewTexture.magFilter = THREE.LinearFilter;
-        this.previewTexture.format = THREE.RGBAFormat;
-        if ("colorSpace" in this.previewTexture && THREE.SRGBColorSpace) {
-          this.previewTexture.colorSpace = THREE.SRGBColorSpace;
-        } else if ("encoding" in this.previewTexture && THREE.sRGBEncoding) {
-          this.previewTexture.encoding = THREE.sRGBEncoding;
-        }
-        console.log("[AR.js] Camera video attached to WebGL background");
-      }
-
-      this.previewTexture.needsUpdate = true;
-      scene.background = this.previewTexture;
-      renderer.setClearAlpha(1);
+      if (!renderer) return;
+      renderer.autoClear = true;
+      renderer.setClearColor(0x000000, 0);
+      renderer.setClearAlpha(0);
+      if (scene) scene.background = null;
     },
 
     _syncCameraVideoStyles() {
@@ -189,6 +166,7 @@
           width: "100vw",
           height: "100vh",
           background: "transparent",
+          zIndex: "2",
         });
       }
     },
@@ -198,7 +176,6 @@
       if (this.previewStream) {
         this.previewStream.getTracks().forEach((track) => track.stop());
       }
-      if (this.previewTexture) this.previewTexture.dispose();
       delete window.startARjs;
       delete window.resetAR;
     },

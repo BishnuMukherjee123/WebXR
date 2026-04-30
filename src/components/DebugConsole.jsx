@@ -2,7 +2,7 @@ import { useEffect, useState } from "react";
 
 export default function DebugConsole() {
   const [logs, setLogs] = useState([]);
-  const [visible, setVisible] = useState(true);
+  const [visible, setVisible] = useState(false);
 
   useEffect(() => {
     // Provide append function other scripts can call
