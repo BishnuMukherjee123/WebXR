@@ -87,9 +87,23 @@
 
       if (!this.hitTestSourceRequested) {
         console.log("[AR-COMPONENT] Requesting hit-test source");
-        session.requestReferenceSpace("viewer")
+
+        // Try 'viewer' reference space first, fall back to 'local-floor' if unavailable
+        const getRefSpace = () => {
+          return session.requestReferenceSpace("viewer")
+            .then(vs => {
+              console.log("[AR-COMPONENT] Viewer reference space obtained");
+              return vs;
+            })
+            .catch((err) => {
+              console.warn("[AR-COMPONENT] 'viewer' ref space not available, trying 'local-floor'", err);
+              return session.requestReferenceSpace("local-floor");
+            });
+        };
+
+        getRefSpace()
           .then(vs => {
-            console.log("[AR-COMPONENT] Viewer reference space obtained");
+            if (!vs) throw new Error('No reference space available');
             return session.requestHitTestSource({ space: vs });
           })
           .then(src => {
@@ -98,7 +112,13 @@
           })
           .catch((err) => {
             console.error("[AR-COMPONENT] Failed to get hit-test source:", err);
+            // Alert user once — hit-test is required for placement on many devices
+            try {
+              const msg = err && err.message ? err.message : String(err);
+              alert('AR hit-test not available: ' + msg + '\nYour device or browser may not support plane detection.');
+            } catch (e) {}
           });
+
         session.addEventListener("end", () => {
           console.log("[AR-COMPONENT] Session ended during hit-test request");
           this.hitTestSourceRequested = false;
