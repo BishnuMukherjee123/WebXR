@@ -13,7 +13,7 @@ export default function ThreeARScene() {
     <div className="ar-app">
       {mode === "home" && <HomeScreen onMode={setMode} />}
       {mode === "webxr" && <WebXRSurfaceMode onBack={() => setMode("home")} />}
-      {mode === "native" && <NativeModelViewerMode onBack={() => setMode("home")} />}
+      {mode === "native" && <Desktop3DMode onBack={() => setMode("home")} isNativeMode={true} />}
       {mode === "marker" && <MarkerARMode onBack={() => setMode("home")} />}
     </div>
   );
@@ -68,7 +68,7 @@ function WebXRSurfaceMode({ onBack }) {
     });
     return () => {
       active = false;
-      cleanupRef.current?.();
+      cleanupRef.current?.cleanup?.();
     };
   }, []);
 
@@ -78,8 +78,8 @@ function WebXRSurfaceMode({ onBack }) {
     setStatus("Starting WebXR...");
 
     try {
-      const cleanup = await initWebXR(canvasRef.current, setStatus, modelRef, reticleRef);
-      cleanupRef.current = cleanup;
+      const handles = await initWebXR(canvasRef.current, setStatus, modelRef, reticleRef);
+      cleanupRef.current = handles;
       setStatus("Move slowly. Tap the floor when the ring appears.");
       console.log("[WebXR] Surface mode started");
     } catch (err) {
@@ -87,11 +87,6 @@ function WebXRSurfaceMode({ onBack }) {
       setStatus(err?.message || "Could not start WebXR AR.");
       setStarting(false);
     }
-  }
-
-  function resetPlacement() {
-    if (modelRef.current) modelRef.current.visible = false;
-    setStatus("Move slowly. Tap the floor when the ring appears.");
   }
 
   return (
@@ -107,7 +102,7 @@ function WebXRSurfaceMode({ onBack }) {
             Start Surface AR
           </button>
         )}
-        {starting && <button onClick={resetPlacement}>Reset</button>}
+        {starting && <button onClick={() => cleanupRef.current?.reset?.()}>Reset</button>}
       </div>
     </div>
   );
@@ -124,13 +119,27 @@ async function initWebXR(canvas, setStatus, modelRef, reticleRef) {
   renderer.setPixelRatio(Math.min(window.devicePixelRatio || 1, 2));
   renderer.setSize(window.innerWidth, window.innerHeight, false);
   renderer.outputColorSpace = THREE.SRGBColorSpace;
+  renderer.shadowMap.enabled = true;
+  renderer.shadowMap.type = THREE.PCFSoftShadowMap;
 
   const scene = new THREE.Scene();
   const camera = new THREE.PerspectiveCamera();
 
-  scene.add(new THREE.HemisphereLight(0xffffff, 0x808080, 1.2));
-  const light = new THREE.DirectionalLight(0xffffff, 2);
-  light.position.set(1.4, 3, 1.6);
+  // Apply the same moody cinematic lighting and drop-shadow physics to WebXR
+  scene.add(new THREE.AmbientLight(0x404050, 0.6));
+  const light = new THREE.DirectionalLight(0xfff0dd, 3.5);
+  light.position.set(0, 10, 0); // Overhead for perfect drop shadow
+  light.castShadow = true;
+  light.shadow.camera.left = -10;
+  light.shadow.camera.right = 10;
+  light.shadow.camera.top = 10;
+  light.shadow.camera.bottom = -10;
+  light.shadow.camera.near = 0.5;
+  light.shadow.camera.far = 25;
+  light.shadow.mapSize.width = 2048;
+  light.shadow.mapSize.height = 2048;
+  light.shadow.bias = -0.0005;
+  light.shadow.radius = 1.5;
   scene.add(light);
 
   const model = await loadModel();
@@ -163,25 +172,55 @@ async function initWebXR(canvas, setStatus, modelRef, reticleRef) {
     renderer.setSize(window.innerWidth, window.innerHeight, false);
   }
 
+  let isPlaced = false;
+
   function placeModel() {
-    if (!reticle.visible) {
-      setStatus("No floor hit yet. Move slowly and aim at a textured surface.");
-      return;
-    }
+    if (!reticle.visible || isPlaced) return;
+    
     model.position.setFromMatrixPosition(reticle.matrix);
     model.quaternion.setFromRotationMatrix(reticle.matrix);
+    model.position.y += 0.05; // 5cm floating gap
     model.visible = true;
-    setStatus("Placed. Move your phone around the dish.");
-    console.log("[WebXR] Model placed on hit-test surface");
+    isPlaced = true;
+    reticle.visible = false;
+    setStatus("Locked! Use two fingers to scale the dish.");
+  }
+
+  // Touch pinch to scale in WebXR
+  let touchStartDist = 0;
+  let initialScale = 1;
+
+  function onTouchStart(e) {
+    if (e.touches.length === 2) {
+      const dx = e.touches[0].pageX - e.touches[1].pageX;
+      const dy = e.touches[0].pageY - e.touches[1].pageY;
+      touchStartDist = Math.sqrt(dx*dx + dy*dy);
+      initialScale = model.scale.x;
+    }
+  }
+
+  function onTouchMove(e) {
+    if (e.touches.length === 2 && isPlaced) {
+      const dx = e.touches[0].pageX - e.touches[1].pageX;
+      const dy = e.touches[0].pageY - e.touches[1].pageY;
+      const dist = Math.sqrt(dx*dx + dy*dy);
+      const scaleFactor = dist / touchStartDist;
+      
+      let newScale = initialScale * scaleFactor;
+      newScale = Math.max(0.05, Math.min(newScale, 15.0));
+      model.scale.setScalar(newScale);
+    }
   }
 
   session.addEventListener("select", placeModel);
   window.addEventListener("resize", resize);
+  window.addEventListener("touchstart", onTouchStart);
+  window.addEventListener("touchmove", onTouchMove);
 
   renderer.setAnimationLoop((_, frame) => {
     if (frame) {
       const hits = frame.getHitTestResults(hitTestSource);
-      if (hits.length > 0) {
+      if (hits.length > 0 && !isPlaced) {
         const pose = hits[0].getPose(referenceSpace);
         reticle.visible = true;
         reticle.matrix.fromArray(pose.transform.matrix);
@@ -192,70 +231,29 @@ async function initWebXR(canvas, setStatus, modelRef, reticleRef) {
     renderer.render(scene, camera);
   });
 
-  return () => {
-    renderer.setAnimationLoop(null);
-    window.removeEventListener("resize", resize);
-    session.removeEventListener("select", placeModel);
-    hitTestSource.cancel?.();
-    if (session.end) session.end().catch(() => {});
-    disposeWorld(scene);
-    renderer.dispose();
-    modelRef.current = null;
-    reticleRef.current = null;
+  return {
+    cleanup: () => {
+      renderer.setAnimationLoop(null);
+      window.removeEventListener("resize", resize);
+      window.removeEventListener("touchstart", onTouchStart);
+      window.removeEventListener("touchmove", onTouchMove);
+      session.removeEventListener("select", placeModel);
+      hitTestSource.cancel?.();
+      if (session.end) session.end().catch(() => {});
+      disposeWorld(scene);
+      renderer.dispose();
+      modelRef.current = null;
+      reticleRef.current = null;
+    },
+    reset: () => {
+      isPlaced = false;
+      if (modelRef.current) modelRef.current.visible = false;
+      setStatus("Move slowly. Tap the floor when the ring appears.");
+    }
   };
 }
 
-function NativeModelViewerMode({ onBack }) {
-  const [scriptReady, setScriptReady] = useState(Boolean(customElements.get("model-viewer")));
-
-  useEffect(() => {
-    if (customElements.get("model-viewer")) {
-      return undefined;
-    }
-
-    const script = document.createElement("script");
-    script.type = "module";
-    script.src = "https://unpkg.com/@google/model-viewer/dist/model-viewer.min.js";
-    script.onload = () => setScriptReady(true);
-    script.onerror = () => console.error("[model-viewer] Could not load model-viewer script");
-    document.head.appendChild(script);
-    return () => {};
-  }, []);
-
-  return (
-    <div className="native-viewer">
-      <div className="ar-topbar">
-        <button onClick={onBack}>Back</button>
-        <div>Native Surface AR</div>
-      </div>
-      {scriptReady ? (
-        <model-viewer
-          src={MODEL_URL}
-          alt="Bong Kebab"
-          ar
-          ar-modes="webxr scene-viewer quick-look"
-          ar-placement="floor"
-          ar-scale="auto"
-          quick-look-browsers="safari chrome"
-          camera-controls
-          auto-rotate
-          shadow-intensity="1"
-          exposure="1"
-          className="native-viewer__model"
-        >
-          <button slot="ar-button" className="native-viewer__ar-button">
-            View in AR
-          </button>
-        </model-viewer>
-      ) : (
-        <div className="native-viewer__loading">Loading native AR viewer...</div>
-      )}
-      <div className="native-viewer__note">
-        Android opens Scene Viewer. iPhone AR needs a USDZ file for best Quick Look support.
-      </div>
-    </div>
-  );
-}
+// Removed the old NativeModelViewerMode since it is now powered completely by Desktop3DMode
 
 function MarkerARMode({ onBack }) {
   return (
@@ -284,7 +282,7 @@ async function loadModel() {
 
   const model = gltf.scene;
   normalizeModel(model);
-  model.scale.setScalar(MODEL_SCALE);
+  model.scale.multiplyScalar(MODEL_SCALE);
   model.traverse((child) => {
     if (!child.isMesh) return;
     child.castShadow = true;
@@ -316,4 +314,204 @@ function disposeWorld(scene) {
       materials.forEach((mat) => mat.dispose());
     }
   });
+}
+
+function Desktop3DMode({ onBack, isNativeMode }) {
+  const canvasRef = useRef(null);
+  const cleanupRef = useRef(null);
+  const [status, setStatus] = useState("Tap anywhere on the floor to place the dish.");
+  const [placed, setPlaced] = useState(false);
+  
+  const [scriptReady, setScriptReady] = useState(Boolean(customElements.get("model-viewer")));
+  const modelViewerRef = useRef(null);
+
+  useEffect(() => {
+    if (isNativeMode && !customElements.get("model-viewer")) {
+      const script = document.createElement("script");
+      script.type = "module";
+      script.src = "https://unpkg.com/@google/model-viewer/dist/model-viewer.min.js";
+      script.onload = () => setScriptReady(true);
+      document.head.appendChild(script);
+    }
+  }, [isNativeMode]);
+
+  useEffect(() => {
+    let active = true;
+    async function init() {
+      const handles = await initDesktop3D(canvasRef.current, setStatus, setPlaced);
+      if (active) cleanupRef.current = handles;
+      else handles.cleanup();
+    }
+    init();
+    return () => {
+      active = false;
+      cleanupRef.current?.cleanup();
+    };
+  }, []);
+
+  return (
+    <div className="ar-stage">
+      <canvas ref={canvasRef} className="ar-stage__canvas" />
+      <div className="ar-topbar">
+        <button onClick={onBack}>Back</button>
+        <div>{status}</div>
+      </div>
+      
+      {isNativeMode && scriptReady && (
+        <model-viewer
+          ref={modelViewerRef}
+          src={MODEL_URL}
+          ar
+          ar-modes="webxr scene-viewer quick-look"
+          ar-scale="fixed"
+          style={{ position: 'absolute', width: 0, height: 0, opacity: 0, pointerEvents: 'none' }}
+        ></model-viewer>
+      )}
+
+      <div className="ar-actions" style={{ flexDirection: 'column', gap: '12px', alignItems: 'center' }}>
+        {placed && <button onClick={() => cleanupRef.current?.reset()}>Reset Position</button>}
+        
+        {isNativeMode && scriptReady && (
+          <button 
+            className="is-primary" 
+            style={{ backgroundColor: '#fff', color: '#111' }}
+            onClick={() => modelViewerRef.current?.activateAR()}
+          >
+            Launch Native AR Viewer
+          </button>
+        )}
+      </div>
+    </div>
+  );
+}
+
+async function initDesktop3D(canvas, setStatus, setPlaced) {
+  const renderer = new THREE.WebGLRenderer({ canvas, antialias: true });
+  renderer.setPixelRatio(Math.min(window.devicePixelRatio || 1, 2));
+  renderer.setSize(window.innerWidth, window.innerHeight, false);
+  renderer.outputColorSpace = THREE.SRGBColorSpace;
+  renderer.shadowMap.enabled = true;
+  renderer.shadowMap.type = THREE.PCFSoftShadowMap;
+
+  const scene = new THREE.Scene();
+  scene.background = new THREE.Color(0x1a1a24);
+  scene.fog = new THREE.Fog(0x1a1a24, 2, 20);
+
+  const camera = new THREE.PerspectiveCamera(50, window.innerWidth / window.innerHeight, 0.1, 100);
+  camera.position.set(0, 1.5, 2.5);
+  camera.lookAt(0, 0, -1);
+
+  // Soft ambient fill light (cool tone)
+  scene.add(new THREE.AmbientLight(0x404050, 0.6)); // Reduced to make the shadow much darker
+
+  // Main directional light (warm tone) angled straight down
+  const light = new THREE.DirectionalLight(0xfff0dd, 3.5);
+  light.position.set(0, 10, 0); // Positioned directly overhead for a perfect drop-shadow
+  light.castShadow = true;
+  
+  // Expand the shadow camera so shadows are cast even when dish is moved far away
+  light.shadow.camera.left = -10;
+  light.shadow.camera.right = 10;
+  light.shadow.camera.top = 10;
+  light.shadow.camera.bottom = -10;
+  light.shadow.camera.near = 0.5;
+  light.shadow.camera.far = 25;
+  
+  light.shadow.mapSize.width = 2048; // High-res shadow
+  light.shadow.mapSize.height = 2048;
+  light.shadow.bias = -0.0005;
+  light.shadow.radius = 1.5; // Slightly sharper, pronounced shadow edge to match reference
+  scene.add(light);
+
+  const floorGeo = new THREE.PlaneGeometry(100, 100);
+  const floorMat = new THREE.MeshStandardMaterial({ 
+    color: 0x555555, // Darkened floor to match the moody reference picture
+    roughness: 0.9,
+    metalness: 0.1
+  });
+  const floor = new THREE.Mesh(floorGeo, floorMat);
+  floor.rotation.x = -Math.PI / 2;
+  floor.receiveShadow = true;
+  scene.add(floor);
+
+  // Add grid for better depth perception
+  const grid = new THREE.GridHelper(100, 200, 0x888888, 0x333333);
+  grid.position.y = 0.001;
+  scene.add(grid);
+
+  const model = await loadModel();
+  model.position.set(0, 0.05, -1); // 5cm floating
+  scene.add(model);
+
+  const raycaster = new THREE.Raycaster();
+  const mouse = new THREE.Vector2();
+  
+  let isPlaced = false;
+
+  function onPointerDown(event) {
+    if (event.target !== canvas) return; // ignore clicks on buttons
+    if (isPlaced) return; // lock position after first placement
+
+    mouse.x = (event.clientX / window.innerWidth) * 2 - 1;
+    mouse.y = -(event.clientY / window.innerHeight) * 2 + 1;
+    raycaster.setFromCamera(mouse, camera);
+    const intersects = raycaster.intersectObject(floor);
+    if (intersects.length > 0) {
+      model.position.copy(intersects[0].point);
+      model.position.y += 0.05; // hover 5cm above surface
+      isPlaced = true;
+      setStatus("Dish locked in place. Use trackpad to zoom in/out.");
+      setPlaced(true);
+    }
+  }
+
+  function onWheel(event) {
+    event.preventDefault();
+    // Trackpad pinch-to-zoom triggers wheel events. 
+    // deltaY < 0 is zooming in, deltaY > 0 is zooming out.
+    const zoomSpeed = 0.005;
+    const zoomFactor = 1 - (event.deltaY * zoomSpeed);
+    
+    // Protect against huge jumps
+    const safeFactor = Math.max(0.8, Math.min(zoomFactor, 1.2));
+    
+    model.scale.multiplyScalar(safeFactor);
+    
+    // Clamp scale to reasonable limits
+    const maxS = 15.0;
+    const minS = 0.05;
+    if (model.scale.x > maxS) model.scale.setScalar(maxS);
+    if (model.scale.x < minS) model.scale.setScalar(minS);
+  }
+
+  window.addEventListener('pointerdown', onPointerDown);
+  window.addEventListener('wheel', onWheel, { passive: false });
+
+  function resize() {
+    camera.aspect = window.innerWidth / window.innerHeight;
+    camera.updateProjectionMatrix();
+    renderer.setSize(window.innerWidth, window.innerHeight, false);
+  }
+  window.addEventListener('resize', resize);
+
+  renderer.setAnimationLoop(() => {
+    renderer.render(scene, camera);
+  });
+
+  return {
+    cleanup: () => {
+      renderer.setAnimationLoop(null);
+      window.removeEventListener('pointerdown', onPointerDown);
+      window.removeEventListener('wheel', onWheel);
+      window.removeEventListener('resize', resize);
+      disposeWorld(scene);
+      renderer.dispose();
+    },
+    reset: () => {
+      isPlaced = false;
+      model.position.set(0, 0.05, -1);
+      setStatus("Tap anywhere on the floor to place the dish.");
+      setPlaced(false);
+    }
+  };
 }
