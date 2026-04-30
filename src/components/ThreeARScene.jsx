@@ -87,6 +87,8 @@ export default function ThreeARScene() {
     worldTracker.horizontalPlaneDetectionEnabled = true;
     worldTracker.verticalPlaneDetectionEnabled = false;
     worldTrackerRef.current = worldTracker;
+    const trackingUI = new ZapparThree.WorldTrackerUI(canvas);
+    trackingUI.setText("Move your phone slowly left and right");
 
     const customAnchor = new CustomAnchor(worldTracker);
     customAnchorRef.current = customAnchor;
@@ -159,6 +161,7 @@ export default function ThreeARScene() {
     function render() {
       rafId = requestAnimationFrame(render);
       camera.updateFrame(renderer);
+      updateTrackingUI(trackingUI, worldTracker);
       updatePlacedAnchor(camera);
       renderer.render(scene, camera);
     }
@@ -173,6 +176,8 @@ export default function ThreeARScene() {
       window.removeEventListener("resize", resize);
       camera.stop();
       camera.dispose();
+      trackingUI.hide();
+      trackingUI.dom?.remove();
       customAnchor.destroy();
       worldTracker.destroy();
       disposeWorld(scene);
@@ -189,6 +194,25 @@ export default function ThreeARScene() {
       currentModelRef.current = null;
       placedRef.current = false;
     };
+  }
+
+  function updateTrackingUI(trackingUI, worldTracker) {
+    if (placedRef.current) {
+      trackingUI.hide();
+      return;
+    }
+
+    const hasTrackedPlane = [...worldTracker.planes.values()].some(
+      (plane) => plane.status === ZapparThree.AnchorStatus.ANCHOR_STATUS_TRACKING,
+    );
+
+    if (hasTrackedPlane || worldTracker.groundAnchor.status !== ZapparThree.AnchorStatus.ANCHOR_STATUS_STOPPED) {
+      trackingUI.hide();
+      return;
+    }
+
+    trackingUI.show();
+    trackingUI.update();
   }
 
   async function loadDish(dish) {
