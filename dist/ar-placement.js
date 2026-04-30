@@ -15,6 +15,7 @@
       this.marker = null;
       this.model = null;
       this.inSession = false;
+      this.previewStream = null;
       this.videoStyleTimer = null;
 
       this.sceneEl.addEventListener("loaded", () => {
@@ -38,6 +39,7 @@
         });
 
         console.log("[AR.js] Scene loaded");
+        this._forceTransparentRenderer();
       });
 
       this.sceneEl.addEventListener("camera-init", () => {
@@ -50,10 +52,12 @@
         alert("Camera could not start. Please allow camera permission and reload the page.");
       });
 
-      window.startARjs = () => {
+      window.startARjs = async () => {
         if (this.inSession) return;
         this.inSession = true;
         document.body.classList.add("arjs-running");
+        await this._startPreviewVideo();
+        this._forceTransparentRenderer();
         this._syncCameraVideoStyles();
         this.videoStyleTimer = window.setInterval(() => this._syncCameraVideoStyles(), 500);
         window.setTimeout(() => {
@@ -77,8 +81,59 @@
       };
     },
 
+    tick() {
+      if (this.inSession) this._forceTransparentRenderer();
+    },
+
+    async _startPreviewVideo() {
+      let preview = document.getElementById("camera-preview");
+      if (!preview) {
+        preview = document.createElement("video");
+        preview.id = "camera-preview";
+        preview.muted = true;
+        preview.autoplay = true;
+        preview.playsInline = true;
+        preview.setAttribute("playsinline", "");
+        preview.setAttribute("webkit-playsinline", "");
+        document.body.prepend(preview);
+      }
+
+      if (!this.previewStream) {
+        try {
+          this.previewStream = await navigator.mediaDevices.getUserMedia({
+            video: {
+              facingMode: { ideal: "environment" },
+              width: { ideal: 1280 },
+              height: { ideal: 720 },
+            },
+            audio: false,
+          });
+          console.log("[AR.js] Preview camera stream started");
+        } catch (error) {
+          console.error("[AR.js] Preview camera failed", error);
+          return;
+        }
+      }
+
+      preview.srcObject = this.previewStream;
+      try {
+        await preview.play();
+      } catch (error) {
+        console.warn("[AR.js] Preview video play was blocked", error);
+      }
+    },
+
+    _forceTransparentRenderer() {
+      const renderer = this.sceneEl && this.sceneEl.renderer;
+      if (!renderer) return;
+      renderer.setClearColor(0x000000, 0);
+      renderer.setClearAlpha(0);
+      if (this.sceneEl.object3D) this.sceneEl.object3D.background = null;
+    },
+
     _syncCameraVideoStyles() {
-      document.querySelectorAll("#arjs-video, video").forEach((video) => {
+      document.querySelectorAll("video").forEach((video) => {
+        const isPreview = video.id === "camera-preview";
         video.setAttribute("playsinline", "");
         video.setAttribute("webkit-playsinline", "");
         Object.assign(video.style, {
@@ -90,8 +145,9 @@
           objectFit: "cover",
           zIndex: "0",
           display: "block",
-          opacity: "1",
+          opacity: isPreview ? "1" : "0",
           visibility: "visible",
+          pointerEvents: "none",
         });
       });
 
@@ -110,6 +166,9 @@
 
     remove() {
       if (this.videoStyleTimer) window.clearInterval(this.videoStyleTimer);
+      if (this.previewStream) {
+        this.previewStream.getTracks().forEach((track) => track.stop());
+      }
       delete window.startARjs;
       delete window.resetAR;
     },
