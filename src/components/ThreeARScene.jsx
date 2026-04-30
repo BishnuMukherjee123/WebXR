@@ -1,110 +1,122 @@
 import { useEffect, useRef, useState } from "react";
 import * as THREE from "three";
+import * as ZapparThree from "@zappar/zappar-threejs";
+import { CustomAnchor, TransformOrientation } from "@zappar/zappar";
+import { PlanesMeshes } from "@zappar/zappar-threejs/lib/mesh/planesmeshes.js";
 import { GLTFLoader } from "three/examples/jsm/loaders/GLTFLoader.js";
 import { DRACOLoader } from "three/examples/jsm/loaders/DRACOLoader.js";
 
 const MODEL_BASE_SCALE = 0.8;
-const PLACEMENT_DEPTH = -2.05;
-const MODEL_URL =
-  "https://iskchovltfnohyftjckg.supabase.co/storage/v1/object/public/models/10.glb";
+const MODEL_URL = "/models/10.glb";
 
-const DISHES = [
-  { id: "dish-1", name: "Bong Kebab", url: MODEL_URL },
-];
+const DISHES = [{ id: "dish-1", name: "Bong Kebab", url: MODEL_URL }];
 
 export default function ThreeARScene() {
   const containerRef = useRef(null);
-  const videoRef = useRef(null);
   const canvasRef = useRef(null);
   const cleanupRef = useRef(null);
-  const anchorRef = useRef(null);
   const cameraRef = useRef(null);
+  const worldTrackerRef = useRef(null);
+  const planesRef = useRef(null);
+  const customAnchorRef = useRef(null);
+  const anchorGroupRef = useRef(null);
+  const contentRef = useRef(null);
   const loaderRef = useRef(null);
   const dracoLoaderRef = useRef(null);
   const currentModelRef = useRef(null);
-  const orientationRef = useRef({ current: null, baseline: null, available: false });
   const pointersRef = useRef(new Map());
   const gestureRef = useRef({ x: 0, y: 0, distance: 0, scale: 1, placed: false });
+  const placedRef = useRef(false);
   const [started, setStarted] = useState(false);
   const [loading, setLoading] = useState(false);
   const [placed, setPlaced] = useState(false);
-  const [status, setStatus] = useState("Camera AR viewer");
+  const [status, setStatus] = useState("Zappar world tracking");
   const [error, setError] = useState("");
 
   async function startAR() {
-    if (!navigator.mediaDevices?.getUserMedia) {
-      setError("Camera API is not available in this browser.");
-      return;
-    }
-
     setError("");
     setLoading(true);
 
     try {
-      const stream = await navigator.mediaDevices.getUserMedia({
-        video: {
-          facingMode: { ideal: "environment" },
-          width: { ideal: 1280 },
-          height: { ideal: 720 },
-        },
-        audio: false,
-      });
+      if (ZapparThree.browserIncompatible()) {
+        throw new Error("This browser does not support Zappar world tracking. Open this link in Safari or Chrome on your phone.");
+      }
 
-      const video = videoRef.current;
-      video.srcObject = stream;
-      video.muted = true;
-      video.autoplay = true;
-      video.playsInline = true;
-      video.setAttribute("playsinline", "");
-      video.setAttribute("webkit-playsinline", "");
-      await video.play();
-      const stopOrientation = await startOrientationTracking();
+      ZapparThree.setPreferWebXRCamera(false);
+      const granted = await ZapparThree.permissionRequest();
+      if (!granted) {
+        throw new Error("Camera or motion permission was denied.");
+      }
 
-      const cleanup = await initThree(stream, stopOrientation);
+      const cleanup = await initZapparWorldTracking();
       cleanupRef.current = cleanup;
       setStarted(true);
-      setStatus("Tap the table/floor area to place the dish.");
-      console.log("[ThreeAR] Browser camera viewer started", `${video.videoWidth}x${video.videoHeight}`);
+      setStatus("Move slowly until surfaces appear, then tap the floor/table.");
+      console.log("[ZapparAR] World tracking started");
     } catch (err) {
-      console.error("[ThreeAR] Start failed", err);
-      setError(err?.message || "Could not start camera.");
+      console.error("[ZapparAR] Start failed", err);
+      setError(err?.message || "Could not start Zappar AR.");
     } finally {
       setLoading(false);
     }
   }
 
-  async function initThree(stream, stopOrientation) {
+  async function initZapparWorldTracking() {
     const container = containerRef.current;
     const canvas = canvasRef.current;
     const renderer = new THREE.WebGLRenderer({
       canvas,
-      alpha: true,
+      alpha: false,
       antialias: true,
       powerPreference: "high-performance",
     });
-    renderer.setClearColor(0x000000, 0);
     renderer.setPixelRatio(Math.min(window.devicePixelRatio || 1, 2));
     renderer.outputColorSpace = THREE.SRGBColorSpace;
     renderer.shadowMap.enabled = true;
-    renderer.shadowMap.type = THREE.PCFSoftShadowMap;
+    renderer.shadowMap.type = THREE.PCFShadowMap;
+
+    ZapparThree.glContextSet(renderer.getContext());
 
     const scene = new THREE.Scene();
-    const camera = new THREE.PerspectiveCamera(55, 1, 0.01, 100);
-    camera.position.set(0, 0.95, 2.45);
-    camera.lookAt(0, 0.15, PLACEMENT_DEPTH);
+    const camera = new ZapparThree.Camera({ zNear: 0.01, zFar: 100 });
+    camera.profile = ZapparThree.CameraProfile.High;
+    scene.background = camera.backgroundTexture;
     cameraRef.current = camera;
 
-    const anchor = new THREE.Group();
-    anchor.visible = false;
-    anchor.position.set(0, 0, PLACEMENT_DEPTH);
-    scene.add(anchor);
-    anchorRef.current = anchor;
+    const worldTracker = new ZapparThree.WorldTracker();
+    worldTracker.horizontalPlaneDetectionEnabled = true;
+    worldTracker.verticalPlaneDetectionEnabled = false;
+    worldTrackerRef.current = worldTracker;
 
-    const ambient = new THREE.HemisphereLight(0xffffff, 0x808080, 1.1);
+    const customAnchor = new CustomAnchor(worldTracker);
+    customAnchorRef.current = customAnchor;
+
+    const anchorGroup = new THREE.Group();
+    anchorGroup.matrixAutoUpdate = false;
+    anchorGroup.visible = false;
+    scene.add(anchorGroup);
+    anchorGroupRef.current = anchorGroup;
+
+    const content = new THREE.Group();
+    anchorGroup.add(content);
+    contentRef.current = content;
+
+    const planes = new PlanesMeshes(camera, worldTracker, {
+      color: 0xffffff,
+      transparent: true,
+      opacity: 0.14,
+      side: THREE.DoubleSide,
+      depthWrite: false,
+    });
+    planes.visible = true;
+    scene.add(planes);
+    planesRef.current = planes;
+
+    const ambient = new THREE.HemisphereLight(0xffffff, 0x808080, 1.15);
     scene.add(ambient);
 
-    const key = new THREE.DirectionalLight(0xffffff, 2.2);
-    key.position.set(1.4, 3.2, 1.6);
+    const key = new THREE.DirectionalLight(0xffffff, 2.1);
+    key.position.set(1.5, 3.2, 1.5);
     key.castShadow = true;
     key.shadow.mapSize.set(1024, 1024);
     key.shadow.camera.near = 0.1;
@@ -115,23 +127,22 @@ export default function ThreeARScene() {
     key.shadow.camera.bottom = -3;
     key.shadow.bias = -0.0007;
     scene.add(key);
-    key.target = anchor;
+    key.target = content;
 
-    const fill = new THREE.DirectionalLight(0xffffff, 0.8);
-    fill.position.set(-2, 1, 1);
+    const fill = new THREE.DirectionalLight(0xffffff, 0.6);
+    fill.position.set(-2, 1.2, 1);
     scene.add(fill);
 
     const shadowCatcher = new THREE.Mesh(
       new THREE.PlaneGeometry(5, 5),
-      new THREE.ShadowMaterial({ opacity: 0.5 }),
+      new THREE.ShadowMaterial({ opacity: 0.42 }),
     );
     shadowCatcher.rotation.x = -Math.PI / 2;
-    shadowCatcher.position.y = 0;
     shadowCatcher.receiveShadow = true;
-    anchor.add(shadowCatcher);
+    content.add(shadowCatcher);
 
     dracoLoaderRef.current = new DRACOLoader();
-    dracoLoaderRef.current.setDecoderPath("/draco/");
+    dracoLoaderRef.current.setDecoderPath("/draco/gltf/");
     dracoLoaderRef.current.setDecoderConfig({ type: "wasm" });
 
     loaderRef.current = new GLTFLoader();
@@ -142,47 +153,54 @@ export default function ThreeARScene() {
       const width = container.clientWidth || window.innerWidth;
       const height = container.clientHeight || window.innerHeight;
       renderer.setSize(width, height, false);
-      camera.aspect = width / height;
-      camera.updateProjectionMatrix();
     }
 
     let rafId = 0;
     function render() {
       rafId = requestAnimationFrame(render);
-      updateCameraForPlacedAnchor(camera);
+      camera.updateFrame(renderer);
+      updatePlacedAnchor(camera);
       renderer.render(scene, camera);
     }
 
     resize();
     window.addEventListener("resize", resize);
+    camera.start(false);
     render();
 
     return () => {
       cancelAnimationFrame(rafId);
       window.removeEventListener("resize", resize);
-      stopOrientation?.();
-      stream.getTracks().forEach((track) => track.stop());
+      camera.stop();
+      camera.dispose();
+      customAnchor.destroy();
+      worldTracker.destroy();
       disposeWorld(scene);
       dracoLoaderRef.current?.dispose();
       renderer.dispose();
-      anchorRef.current = null;
       cameraRef.current = null;
+      worldTrackerRef.current = null;
+      planesRef.current = null;
+      customAnchorRef.current = null;
+      anchorGroupRef.current = null;
+      contentRef.current = null;
       loaderRef.current = null;
       dracoLoaderRef.current = null;
       currentModelRef.current = null;
+      placedRef.current = false;
     };
   }
 
   async function loadDish(dish) {
-    const anchor = anchorRef.current;
+    const content = contentRef.current;
     const loader = loaderRef.current;
-    if (!anchor || !loader) return;
+    if (!content || !loader) return;
 
     setStatus(`Loading ${dish.name}...`);
 
     try {
       if (currentModelRef.current) {
-        anchor.remove(currentModelRef.current);
+        content.remove(currentModelRef.current);
         disposeObject(currentModelRef.current);
         currentModelRef.current = null;
       }
@@ -198,15 +216,11 @@ export default function ThreeARScene() {
         child.receiveShadow = false;
         if (child.material) child.material.needsUpdate = true;
       });
-      anchor.add(model);
+      content.add(model);
       currentModelRef.current = model;
-      setStatus(
-        anchor.visible
-          ? `${dish.name} placed. Drag to rotate, pinch to resize.`
-          : `Tap the table/floor area to place ${dish.name}.`,
-      );
+      setStatus("Move slowly until surfaces appear, then tap the floor/table.");
     } catch (err) {
-      console.error("[ThreeAR] Dish load failed", err);
+      console.error("[ZapparAR] Dish load failed", err);
       setStatus(`Could not load ${dish.name}.`);
     }
   }
@@ -225,128 +239,96 @@ export default function ThreeARScene() {
     model.position.y -= scaledBox.min.y;
   }
 
+  function updatePlacedAnchor(camera) {
+    const anchorGroup = anchorGroupRef.current;
+    const customAnchor = customAnchorRef.current;
+    if (!anchorGroup || !customAnchor || !placedRef.current) return;
+
+    anchorGroup.matrix.fromArray(
+      customAnchor.pose(camera.rawPose, camera.currentMirrorMode === ZapparThree.CameraMirrorMode.Poses),
+    );
+    anchorGroup.matrix.decompose(anchorGroup.position, anchorGroup.quaternion, anchorGroup.scale);
+    anchorGroup.visible = customAnchor.status === ZapparThree.AnchorStatus.ANCHOR_STATUS_TRACKING;
+  }
+
   function placeAtScreenPoint(clientX, clientY) {
-    const anchor = anchorRef.current;
-    const camera = cameraRef.current;
     const canvas = canvasRef.current;
-    if (!anchor || !camera || !canvas) return;
+    const camera = cameraRef.current;
+    const planes = planesRef.current;
+    const worldTracker = worldTrackerRef.current;
+    const customAnchor = customAnchorRef.current;
+    const anchorGroup = anchorGroupRef.current;
+    if (!canvas || !camera || !planes || !worldTracker || !customAnchor || !anchorGroup) return;
 
     const rect = canvas.getBoundingClientRect();
-    const ndc = new THREE.Vector2(
+    const pointer = new THREE.Vector2(
       ((clientX - rect.left) / rect.width) * 2 - 1,
       -(((clientY - rect.top) / rect.height) * 2 - 1),
     );
 
+    camera.updateMatrixWorld();
     const raycaster = new THREE.Raycaster();
-    raycaster.setFromCamera(ndc, camera);
+    raycaster.setFromCamera(pointer, camera);
 
-    const placementPlane = new THREE.Plane(new THREE.Vector3(0, 1, 0), 0);
-    const hit = new THREE.Vector3();
-    const hasHit = raycaster.ray.intersectPlane(placementPlane, hit);
-
-    if (hasHit) {
-      anchor.position.copy(hit);
-      anchor.position.y = 0;
-    } else {
-      anchor.position.set(ndc.x * 1.1, 0, PLACEMENT_DEPTH);
-    }
-
-    anchor.visible = true;
-    orientationRef.current.baseline = orientationRef.current.current
-      ? { ...orientationRef.current.current }
-      : null;
-    setPlaced(true);
-    setStatus(
-      orientationRef.current.available
-        ? "Placed. Move your phone to view, drag to rotate, pinch to resize."
-        : "Placed. Drag to rotate, pinch to resize.",
-    );
-  }
-
-  async function startOrientationTracking() {
-    if (!window.DeviceOrientationEvent) {
-      console.warn("[ThreeAR] Device orientation is not available");
-      return null;
-    }
-
-    try {
-      if (typeof DeviceOrientationEvent.requestPermission === "function") {
-        const permission = await DeviceOrientationEvent.requestPermission();
-        if (permission !== "granted") {
-          console.warn("[ThreeAR] Device orientation permission was not granted");
-          return null;
-        }
-      }
-    } catch (err) {
-      console.warn("[ThreeAR] Device orientation permission failed", err);
-      return null;
-    }
-
-    const onOrientation = (event) => {
-      if (
-        typeof event.alpha !== "number" ||
-        typeof event.beta !== "number" ||
-        typeof event.gamma !== "number"
-      ) {
-        return;
-      }
-
-      orientationRef.current.current = {
-        alpha: event.alpha,
-        beta: event.beta,
-        gamma: event.gamma,
-      };
-      orientationRef.current.available = true;
-    };
-
-    window.addEventListener("deviceorientation", onOrientation, true);
-    return () => window.removeEventListener("deviceorientation", onOrientation, true);
-  }
-
-  function updateCameraForPlacedAnchor(camera) {
-    const anchor = anchorRef.current;
-    const orientation = orientationRef.current;
-    if (!anchor?.visible || !orientation.current || !orientation.baseline) {
-      camera.position.lerp(new THREE.Vector3(0, 0.95, 2.45), 0.08);
-      camera.lookAt(0, 0.15, PLACEMENT_DEPTH);
+    const planeHit = planes.intersect(raycaster)[0];
+    if (planeHit) {
+      const local = planeHit.intersection.point.clone();
+      planeHit.intersection.object.worldToLocal(local);
+      customAnchor.setPoseFromAnchorOffset(
+        planeHit.anchorId,
+        local.x,
+        local.y,
+        local.z,
+        TransformOrientation.Z_TOWARDS_CAMERA,
+      );
+      finishPlacement();
       return;
     }
 
-    const yaw = THREE.MathUtils.degToRad(
-      shortestAngle(orientation.current.alpha, orientation.baseline.alpha),
-    );
-    const pitch = THREE.MathUtils.degToRad(
-      THREE.MathUtils.clamp(orientation.current.beta - orientation.baseline.beta, -35, 35),
-    );
-    const roll = THREE.MathUtils.degToRad(
-      THREE.MathUtils.clamp(orientation.current.gamma - orientation.baseline.gamma, -28, 28),
-    );
+    if (worldTracker.groundAnchor.status !== ZapparThree.AnchorStatus.ANCHOR_STATUS_STOPPED) {
+      const groundMatrix = new THREE.Matrix4().fromArray(
+        worldTracker.groundAnchor.pose(camera.rawPose, camera.currentMirrorMode === ZapparThree.CameraMirrorMode.Poses),
+      );
+      const groundPlane = new THREE.Plane(new THREE.Vector3(0, 1, 0), 0).applyMatrix4(groundMatrix);
+      const point = new THREE.Vector3();
+      if (raycaster.ray.intersectPlane(groundPlane, point)) {
+        const local = point.clone().applyMatrix4(groundMatrix.clone().invert());
+        customAnchor.setPoseFromAnchorOffset(
+          worldTracker.groundAnchor,
+          local.x,
+          local.y,
+          local.z,
+          TransformOrientation.Z_TOWARDS_CAMERA,
+        );
+        finishPlacement();
+        return;
+      }
+    }
 
-    const radius = 2.45;
-    const target = new THREE.Vector3(
-      anchor.position.x,
-      anchor.position.y + 0.28 * anchor.scale.y,
-      anchor.position.z,
-    );
-    const desired = new THREE.Vector3(
-      target.x + Math.sin(-yaw) * radius + Math.sin(roll) * 0.28,
-      THREE.MathUtils.clamp(0.95 - Math.sin(pitch) * 1.15, 0.35, 1.75),
-      target.z + Math.cos(-yaw) * radius,
-    );
+    setStatus("No tracked surface at that tap yet. Move slowly and tap the visible floor/table mesh.");
+  }
 
-    camera.position.lerp(desired, 0.12);
-    camera.lookAt(target);
+  function finishPlacement() {
+    placedRef.current = true;
+    anchorGroupRef.current.visible = true;
+    planesRef.current.visible = false;
+    setPlaced(true);
+    setStatus("Placed on tracked surface. Move your phone around it; drag to rotate, pinch to resize.");
+    console.log("[ZapparAR] Model anchored to tracked surface");
   }
 
   function resetModel() {
-    const anchor = anchorRef.current;
-    if (!anchor) return;
-    anchor.visible = false;
-    anchor.rotation.set(0, 0, 0);
-    anchor.scale.setScalar(1);
-    anchor.position.set(0, 0, PLACEMENT_DEPTH);
+    const anchorGroup = anchorGroupRef.current;
+    const content = contentRef.current;
+    const planes = planesRef.current;
+    if (!anchorGroup || !content || !planes) return;
+    placedRef.current = false;
+    anchorGroup.visible = false;
+    content.rotation.set(0, 0, 0);
+    content.scale.setScalar(1);
+    planes.visible = true;
     setPlaced(false);
-    setStatus("Tap the table/floor area to place the dish.");
+    setStatus("Move slowly until surfaces appear, then tap the floor/table.");
   }
 
   function onPointerDown(event) {
@@ -357,14 +339,14 @@ export default function ThreeARScene() {
       x: event.clientX,
       y: event.clientY,
       distance: points.length >= 2 ? distance(points[0], points[1]) : 0,
-      scale: anchorRef.current?.scale.x || 1,
-      placed,
+      scale: contentRef.current?.scale.x || 1,
+      placed: placedRef.current,
     };
   }
 
   function onPointerMove(event) {
-    const anchor = anchorRef.current;
-    if (!anchor || !pointersRef.current.has(event.pointerId) || !placed) return;
+    const content = contentRef.current;
+    if (!content || !pointersRef.current.has(event.pointerId) || !placedRef.current) return;
 
     pointersRef.current.set(event.pointerId, { x: event.clientX, y: event.clientY });
     const points = [...pointersRef.current.values()];
@@ -377,12 +359,12 @@ export default function ThreeARScene() {
         0.45,
         1.8,
       );
-      anchor.scale.setScalar(nextScale);
+      content.scale.setScalar(nextScale);
       return;
     }
 
     const dx = event.clientX - gestureRef.current.x;
-    anchor.rotation.y += dx * 0.01;
+    content.rotation.y += dx * 0.01;
     gestureRef.current.x = event.clientX;
     gestureRef.current.y = event.clientY;
   }
@@ -403,7 +385,6 @@ export default function ThreeARScene() {
 
   return (
     <div ref={containerRef} className="three-ar">
-      <video ref={videoRef} className="three-ar__video" />
       <canvas
         ref={canvasRef}
         className="three-ar__canvas"
@@ -414,14 +395,14 @@ export default function ThreeARScene() {
       />
 
       <div className="three-ar__hud">
-        <div className="three-ar__pill">{started ? status : "Camera AR viewer"}</div>
+        <div className="three-ar__pill">{started ? status : "Zappar world tracking"}</div>
       </div>
 
       {!started && (
         <div className="three-ar__landing">
           <div className="three-ar__badge">AR</div>
           <h1>Aroma AR</h1>
-          <p>Open the camera, then tap the table or floor area to place the dish.</p>
+          <p>Open the browser camera, scan the floor, then tap the tracked surface to place the dish.</p>
           <button onClick={startAR} disabled={loading}>
             {loading ? "Starting..." : "Launch AR"}
           </button>
@@ -431,7 +412,9 @@ export default function ThreeARScene() {
 
       {started && (
         <div className="three-ar__actions">
-          <button onClick={resetModel}>Reset</button>
+          <button onClick={resetModel} disabled={!placed}>
+            Reset
+          </button>
         </div>
       )}
     </div>
@@ -454,11 +437,4 @@ function disposeObject(obj) {
 
 function distance(a, b) {
   return Math.hypot(a.x - b.x, a.y - b.y);
-}
-
-function shortestAngle(current, base) {
-  let delta = current - base;
-  while (delta > 180) delta -= 360;
-  while (delta < -180) delta += 360;
-  return delta;
 }

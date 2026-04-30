@@ -11,6 +11,8 @@
   },
   "dependencies": {
     "@supabase/supabase-js": "^2.105.0",
+    "@zappar/zappar": "^4.3.0",
+    "@zappar/zappar-threejs": "^4.3.0",
     "puppeteer": "^24.42.0",
     "react": "^19.2.5",
     "react-dom": "^19.2.5",
