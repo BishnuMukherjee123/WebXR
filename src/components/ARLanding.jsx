@@ -11,16 +11,46 @@ export default function ARLanding() {
   const btnRef = useRef(null);
 
   function launchAR() {
+    console.log("[AR] Launch AR button clicked");
     const scene = document.querySelector("a-scene");
     if (!scene) {
+      console.error("[AR] Scene element not found");
       alert("Scene not ready — please wait a moment.");
       return;
     }
-    // A-Frame 1.6: enterAR() requests an immersive-ar session
-    scene.enterAR().catch((err) => {
-      console.error("AR session failed:", err);
-      alert("Could not start AR. Make sure you are on HTTPS and using Chrome on Android.");
-    });
+    
+    console.log("[AR] Scene found, attempting enterAR...");
+    
+    // Check if WebXR is supported
+    if (!navigator.xr) {
+      console.error("[AR] WebXR not supported on this device/browser");
+      alert("WebXR is not supported on this device. Use Chrome on Android with ARCore support.");
+      return;
+    }
+
+    // Check for immersive-ar support
+    navigator.xr.isSessionSupported('immersive-ar')
+      .then((supported) => {
+        console.log("[AR] immersive-ar supported:", supported);
+        if (!supported) {
+          alert("Immersive AR is not supported on this device.");
+          return;
+        }
+        
+        // A-Frame 1.6: enterAR() requests an immersive-ar session
+        scene.enterAR()
+          .then(() => {
+            console.log("[AR] AR session started successfully");
+          })
+          .catch((err) => {
+            console.error("[AR] AR session failed:", err);
+            alert("Could not start AR: " + (err.message || "Unknown error"));
+          });
+      })
+      .catch((err) => {
+        console.error("[AR] Failed to check AR support:", err);
+        alert("Error checking WebXR support: " + err.message);
+      });
   }
 
   return (

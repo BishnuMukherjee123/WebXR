@@ -36,6 +36,7 @@
       });
 
       renderer.xr.addEventListener("sessionstart", () => {
+        console.log("[AR] WebXR session started");
         this.hitTestSourceRequested = false;
         this.hitTestSource          = null;
         this.isPlaced               = false;
@@ -44,6 +45,7 @@
       });
 
       renderer.xr.addEventListener("sessionend", () => {
+        console.log("[AR] WebXR session ended");
         this.hitTestSource          = null;
         this.hitTestSourceRequested = false;
         window.dispatchEvent(new CustomEvent("ar:sessionend"));
