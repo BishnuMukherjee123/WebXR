@@ -9,6 +9,7 @@ import { useRef } from "react";
  */
 export default function ARLanding() {
   const btnRef = useRef(null);
+  let cameraStream = null;
 
   function launchAR() {
     console.log("[AR] Launch AR button clicked");
@@ -97,6 +98,54 @@ export default function ARLanding() {
       });
   }
 
+  function testCamera() {
+    console.log('[AR] Test Camera clicked');
+    if (!navigator.mediaDevices || !navigator.mediaDevices.getUserMedia) {
+      alert('Camera API not available in this browser.');
+      return;
+    }
+
+    const constraints = { video: { facingMode: { ideal: 'environment' } }, audio: false };
+    navigator.mediaDevices.getUserMedia(constraints)
+      .then((stream) => {
+        cameraStream = stream;
+        window.__arConsoleAppend && window.__arConsoleAppend('log', '[AR] Camera stream obtained');
+
+        let vid = document.getElementById('ar-camera-test-video');
+        if (!vid) {
+          vid = document.createElement('video');
+          vid.id = 'ar-camera-test-video';
+          vid.style.position = 'fixed';
+          vid.style.right = '12px';
+          vid.style.top = '12px';
+          vid.style.width = '40vw';
+          vid.style.maxWidth = '240px';
+          vid.style.zIndex = 9999;
+          vid.style.border = '2px solid rgba(255,255,255,0.12)';
+          vid.style.borderRadius = '8px';
+          document.body.appendChild(vid);
+        }
+        vid.srcObject = stream;
+        vid.playsInline = true;
+        vid.muted = true;
+        vid.play().catch((e) => console.warn('[AR] video play failed:', e));
+      })
+      .catch((err) => {
+        console.error('[AR] getUserMedia failed:', err);
+        alert('Camera test failed: ' + (err.message || err.name));
+      });
+  }
+
+  function stopCameraTest() {
+    const vid = document.getElementById('ar-camera-test-video');
+    if (vid) vid.remove();
+    if (cameraStream) {
+      cameraStream.getTracks().forEach(t => t.stop());
+      cameraStream = null;
+    }
+    window.__arConsoleAppend && window.__arConsoleAppend('log', '[AR] Camera test stopped');
+  }
+
   return (
     <div style={{
       position: "fixed", inset: 0, zIndex: 20,
@@ -141,6 +190,10 @@ export default function ARLanding() {
       >
         Launch AR
       </button>
+      <div style={{ marginTop: 12 }}>
+        <button onClick={testCamera} style={{ padding: '10px 18px', marginRight: 8, borderRadius: 40, border: 'none', background: '#2b8cff', color: '#fff' }}>Test Camera</button>
+        <button onClick={stopCameraTest} style={{ padding: '10px 18px', borderRadius: 40, border: 'none', background: '#666', color: '#fff' }}>Stop Camera</button>
+      </div>
     </div>
   );
 }

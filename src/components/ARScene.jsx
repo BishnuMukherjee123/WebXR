@@ -1,6 +1,7 @@
 import { useEffect, useState } from "react";
 import AROverlay from "./AROverlay";
 import ARLanding from "./ARLanding";
+import DebugConsole from "./DebugConsole";
 
 /**
  * ARScene — React UI layer only.
@@ -45,6 +46,7 @@ export default function ARScene() {
         Must be separate so the Launch AR button receives click events.
       */}
       {!inSession && <ARLanding />}
+      <DebugConsole />
     </>
   );
 }
