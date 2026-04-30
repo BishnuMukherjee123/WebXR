@@ -1,6 +1,7 @@
 import { useEffect, useRef, useState } from "react";
 import * as THREE from "three";
 import { GLTFLoader } from "three/examples/jsm/loaders/GLTFLoader.js";
+import { DRACOLoader } from "three/examples/jsm/loaders/DRACOLoader.js";
 
 const MODEL_URL = "/models/10.glb";
 
@@ -93,7 +94,12 @@ export default function ThreeARScene() {
     shadow.position.set(0, -0.72, -1.8);
     scene.add(shadow);
 
+    const dracoLoader = new DRACOLoader();
+    dracoLoader.setDecoderPath("/draco/");
+    dracoLoader.setDecoderConfig({ type: "wasm" });
+
     const loader = new GLTFLoader();
+    loader.setDRACOLoader(dracoLoader);
     const gltf = await loader.loadAsync(MODEL_URL);
     const model = gltf.scene;
     normalizeModel(model);
@@ -132,6 +138,7 @@ export default function ThreeARScene() {
           materials.forEach((mat) => mat.dispose());
         }
       });
+      dracoLoader.dispose();
       renderer.dispose();
     };
   }
