@@ -280,8 +280,13 @@ async function initWebXR(canvas, setStatus, modelRef, reticleRef) {
 }
 
 function NativeModelViewerMode({ onBack }) {
+  const canvasRef = useRef(null);
+  const cleanupRef = useRef(null);
+  const modelViewerRef = useRef(null);
   const [scriptReady, setScriptReady] = useState(Boolean(customElements.get("model-viewer")));
   const [modelViewerScale, setModelViewerScale] = useState(FALLBACK_MODEL_VIEWER_SCALE);
+  const [status, setStatus] = useState("Tap anywhere on the floor to place the dish.");
+  const [placed, setPlaced] = useState(false);
 
   useEffect(() => {
     if (customElements.get("model-viewer")) return;
@@ -307,17 +312,42 @@ function NativeModelViewerMode({ onBack }) {
     };
   }, []);
 
+  useEffect(() => {
+    let active = true;
+    async function init() {
+      const handles = await initDesktop3D(canvasRef.current, setStatus, setPlaced);
+      if (active) cleanupRef.current = handles;
+      else handles.cleanup();
+    }
+    init();
+
+    return () => {
+      active = false;
+      cleanupRef.current?.cleanup();
+    };
+  }, []);
+
   const scaleAttribute = formatVectorScale(modelViewerScale);
 
+  function launchRealSurfaceAR() {
+    if (!scriptReady || !modelViewerRef.current?.activateAR) {
+      setStatus("AR is still loading. Try again in a moment.");
+      return;
+    }
+    modelViewerRef.current.activateAR();
+  }
+
   return (
-    <div className="native-viewer">
+    <div className="native-viewer native-viewer--simulator">
+      <canvas ref={canvasRef} className="ar-stage__canvas" />
       <div className="ar-topbar">
         <button onClick={onBack}>Back</button>
-        <div>Model Viewer AR</div>
+        <div>{status}</div>
       </div>
 
       {scriptReady ? (
         <model-viewer
+          ref={modelViewerRef}
           src={MODEL_URL}
           alt="Bong Kebab"
           ar
@@ -337,18 +367,19 @@ function NativeModelViewerMode({ onBack }) {
           shadow-intensity={SIMULATOR_SHADOW_INTENSITY}
           shadow-softness={SIMULATOR_SHADOW_SOFTNESS}
           exposure="1"
-          className="native-viewer__model"
+          className="native-viewer__ar-host"
         >
-          <button slot="ar-button" className="native-viewer__ar-button">
-            View on Real Surface
-          </button>
+          <button slot="ar-button" className="native-viewer__hidden-ar-button">Open AR</button>
         </model-viewer>
       ) : (
         <div className="native-viewer__loading">Loading model-viewer...</div>
       )}
 
-      <div className="native-viewer__note">
-        Same normalized scale as the simulator. WebXR gives tap-to-place floor AR when the browser supports camera passthrough.
+      <div className="ar-actions ar-actions--stack">
+        {placed && <button onClick={() => cleanupRef.current?.reset()}>Reset Position</button>}
+        <button onClick={launchRealSurfaceAR} disabled={!scriptReady}>
+          View on Real Surface
+        </button>
       </div>
     </div>
   );

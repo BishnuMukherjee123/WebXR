@@ -172,8 +172,7 @@ button {
 }
 
 .ar-topbar button,
-.ar-actions button,
-.native-viewer__ar-button {
+.ar-actions button {
   border: 0;
   border-radius: 999px;
   cursor: pointer;
@@ -227,62 +226,28 @@ button {
   opacity: 0.55;
 }
 
-.native-viewer {
-  position: fixed;
-  display: grid;
-  grid-template-rows: 1fr auto;
+.native-viewer--simulator {
   background: #1a1a24;
 }
 
-.native-viewer::before,
-.native-viewer::after {
+.native-viewer__ar-host {
   position: fixed;
-  inset: 0;
-  content: "";
+  left: -120px;
+  bottom: -120px;
+  width: 1px;
+  height: 1px;
+  opacity: 0;
   pointer-events: none;
 }
 
-.native-viewer::before {
-  z-index: 0;
-  background:
-    linear-gradient(180deg, rgba(26, 26, 36, 0) 0%, rgba(26, 26, 36, 0) 43%, rgba(85, 85, 85, 0.9) 43%, #343438 100%),
-    repeating-linear-gradient(90deg, rgba(136, 136, 136, 0.34) 0 1px, transparent 1px 42px),
-    repeating-linear-gradient(0deg, rgba(51, 51, 51, 0.68) 0 1px, transparent 1px 42px);
-  background-position: 0 0, center 43vh, center 43vh;
-  background-size: auto, 42px 42px, 42px 42px;
+.native-viewer__hidden-ar-button {
+  display: none;
 }
 
-.native-viewer::after {
-  z-index: 0;
-  background:
-    radial-gradient(ellipse at 50% 62%, rgba(255, 240, 221, 0.2), transparent 26%),
-    linear-gradient(180deg, rgba(26, 26, 36, 0.94) 0%, rgba(26, 26, 36, 0.82) 43%, transparent 43%);
-}
-
-.native-viewer__model {
-  position: relative;
-  z-index: 1;
-  width: 100%;
-  height: 100%;
-  background: transparent;
-  --poster-color: transparent;
-}
-
-.native-viewer__ar-button {
-  position: absolute;
-  right: 0;
-  bottom: 28px;
-  left: 0;
-  width: max-content;
-  min-width: 150px;
-  margin: auto;
-  padding: 14px 24px;
-  color: #111;
-  background: #fff;
-}
-
-.native-viewer__loading,
-.native-viewer__note {
+.native-viewer__loading {
+  position: fixed;
+  inset: 0;
+  z-index: 10;
   display: grid;
   place-items: center;
   padding: 18px;
@@ -290,13 +255,10 @@ button {
   text-align: center;
 }
 
-.native-viewer__note {
-  position: relative;
-  z-index: 2;
-  min-height: 62px;
-  padding: 12px 18px;
-  background: rgba(16, 18, 20, 0.86);
-  font-size: 12px;
+.ar-actions--stack {
+  flex-direction: column;
+  gap: 12px;
+  align-items: center;
 }
 
 .marker-mode iframe {
