@@ -131,6 +131,9 @@ async function initWebXR(canvas, setStatus, modelRef, reticleRef) {
     powerPreference: "high-performance",
   });
   renderer.xr.enabled = true;
+  renderer.domElement.style.background = "transparent";
+  renderer.setClearColor(0x000000, 0);
+  renderer.setClearAlpha(0);
   renderer.setPixelRatio(Math.min(window.devicePixelRatio || 1, 2));
   renderer.setSize(window.innerWidth, window.innerHeight, false);
   renderer.outputColorSpace = THREE.SRGBColorSpace;
@@ -138,6 +141,7 @@ async function initWebXR(canvas, setStatus, modelRef, reticleRef) {
   renderer.shadowMap.type = THREE.PCFSoftShadowMap;
 
   const scene = new THREE.Scene();
+  scene.background = null;
   const camera = new THREE.PerspectiveCamera();
 
   // Apply the same moody cinematic lighting and drop-shadow physics to WebXR
@@ -232,6 +236,7 @@ async function initWebXR(canvas, setStatus, modelRef, reticleRef) {
   window.addEventListener("touchmove", onTouchMove);
 
   renderer.setAnimationLoop((_, frame) => {
+    renderer.setClearAlpha(0);
     if (frame) {
       const hits = frame.getHitTestResults(hitTestSource);
       if (hits.length > 0 && !isPlaced) {

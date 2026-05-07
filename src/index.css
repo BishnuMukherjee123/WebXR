@@ -109,7 +109,12 @@ button {
   inset: 0;
   width: 100vw;
   height: 100vh;
+  background: transparent;
   touch-action: none;
+}
+
+.ar-stage {
+  background: transparent;
 }
 
 .ar-stage__prestart {
