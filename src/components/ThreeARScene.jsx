@@ -80,7 +80,7 @@ function WebXRSurfaceMode({ onBack }) {
       const ok = Boolean(navigator.xr && (await navigator.xr.isSessionSupported("immersive-ar")));
       if (active) {
         setSupported(ok);
-        setStatus(ok ? "Tap Start, scan the floor, then tap when the ring appears." : "WebXR surface AR is not supported in this browser.");
+        setStatus(ok ? "Tap Start, scan the surface, then tap to place." : "WebXR surface AR is not supported in this browser.");
       }
     }
     checkSupport().catch((err) => {
@@ -149,7 +149,7 @@ function WebXRSurfaceMode({ onBack }) {
 }
 
 async function initWebXR(canvas, overlayRoot, setStatus, modelRef, reticleRef, options = {}) {
-  const scanStatus = options.scanStatus || "Move slowly. Tap the floor when the ring appears.";
+  const scanStatus = options.scanStatus || "Move slowly, then tap the surface.";
   const foundStatus = options.foundStatus || "Surface found. Tap the floor to lock the dish.";
   const trackingStatus = options.trackingStatus || "Move slowly over a textured floor or table.";
   const placedStatus = options.placedStatus || "Dish locked in place. Use two fingers to zoom in/out.";
@@ -202,10 +202,7 @@ async function initWebXR(canvas, overlayRoot, setStatus, modelRef, reticleRef, o
   shadowSurface.visible = false;
   scene.add(shadowSurface);
 
-  const reticle = new THREE.Mesh(
-    new THREE.RingGeometry(0.08, 0.105, 32).rotateX(-Math.PI / 2),
-    new THREE.MeshBasicMaterial({ color: 0xffffff }),
-  );
+  const reticle = new THREE.Object3D();
   reticle.matrixAutoUpdate = false;
   reticle.visible = false;
   scene.add(reticle);
@@ -226,6 +223,7 @@ async function initWebXR(canvas, overlayRoot, setStatus, modelRef, reticleRef, o
   let stableHitFrames = 0;
   let missedHitFrames = 0;
   let hadStableHit = false;
+  let surfaceReady = false;
   let lastTrackingHint = 0;
   let lowLightFallbackShown = false;
   let scanStartTime = performance.now();
@@ -265,7 +263,7 @@ async function initWebXR(canvas, overlayRoot, setStatus, modelRef, reticleRef, o
   }
 
   function placeModel() {
-    if (!reticle.visible || isPlaced) return;
+    if (!surfaceReady || isPlaced) return;
     if (performance.now() < placementArmedAt) return;
 
     reticle.matrix.decompose(hitPosition, hitQuaternion, hitScale);
@@ -346,6 +344,7 @@ async function initWebXR(canvas, overlayRoot, setStatus, modelRef, reticleRef, o
       stableHitFrames = 0;
       missedHitFrames = 0;
       hadStableHit = false;
+      surfaceReady = false;
       lowLightFallbackShown = false;
       scanStartTime = performance.now();
       placementArmedAt = performance.now() + WEBXR_TAP_ARM_DELAY;
@@ -381,9 +380,10 @@ async function initWebXR(canvas, overlayRoot, setStatus, modelRef, reticleRef, o
         }
 
         stableHitFrames = Math.min(stableHitFrames + 1, 8);
-        reticle.visible = stableHitFrames >= 4;
+        surfaceReady = stableHitFrames >= 3;
+        reticle.visible = false;
         reticle.matrix.compose(reticlePosition, reticleQuaternion, reticleScale);
-        if (reticle.visible && !hadStableHit) {
+        if (surfaceReady && !hadStableHit) {
           hadStableHit = true;
           handles.onLowLightAvailable?.(false);
           setStatus(foundStatus);
@@ -392,6 +392,7 @@ async function initWebXR(canvas, overlayRoot, setStatus, modelRef, reticleRef, o
         missedHitFrames = Math.min(missedHitFrames + 1, 12);
         if (missedHitFrames >= 6) {
           stableHitFrames = 0;
+          surfaceReady = false;
           reticle.visible = false;
         }
         const now = performance.now();
@@ -512,7 +513,7 @@ function NativeModelViewerMode({ onBack }) {
       setBrowserArRunning(true);
 
       const handles = await initWebXR(canvasRef.current, overlayRef.current, setStatus, modelRef, reticleRef, {
-        scanStatus: "Move slowly. Tap the wall when the ring appears.",
+        scanStatus: "Move slowly, then tap the wall.",
         foundStatus: "Wall found. Tap the wall to lock the dish.",
         trackingStatus: "Move slowly over a textured wall.",
         placedStatus: "Dish locked on the wall. Use two fingers to zoom in/out.",
