@@ -217,12 +217,16 @@ button {
   left: 0;
   z-index: 12;
   display: flex;
+  flex-wrap: wrap;
+  gap: 10px;
   justify-content: center;
+  padding: 0 14px;
   pointer-events: none;
 }
 
 .ar-actions button {
   min-width: 160px;
+  max-width: calc(100vw - 28px);
   padding: 14px 24px;
   color: #111;
   background: #fff;

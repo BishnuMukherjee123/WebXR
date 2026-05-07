@@ -12,6 +12,12 @@ const SIMULATOR_CAMERA_TARGET = "0m 0.25m 0m";
 const SIMULATOR_FIELD_OF_VIEW = "50deg";
 const SIMULATOR_SHADOW_INTENSITY = "1.35";
 const SIMULATOR_SHADOW_SOFTNESS = "0.35";
+const LOW_LIGHT_FALLBACK_DELAY = 4200;
+const LOW_LIGHT_MANUAL_DISTANCE = 1.15;
+const LOW_LIGHT_MANUAL_DROP = 0.72;
+const WEBXR_TAP_ARM_DELAY = 850;
+let modelAssetPromise;
+let modelViewerScalePromise;
 
 export default function ThreeARScene() {
   const [mode, setMode] = useState("home");
@@ -65,10 +71,12 @@ function WebXRSurfaceMode({ onBack }) {
   const [status, setStatus] = useState("Checking WebXR support...");
   const [starting, setStarting] = useState(false);
   const [supported, setSupported] = useState(false);
+  const [lowLightAvailable, setLowLightAvailable] = useState(false);
 
   useEffect(() => {
     let active = true;
     async function checkSupport() {
+      preloadModel();
       const ok = Boolean(navigator.xr && (await navigator.xr.isSessionSupported("immersive-ar")));
       if (active) {
         setSupported(ok);
@@ -88,10 +96,12 @@ function WebXRSurfaceMode({ onBack }) {
   async function startWebXR() {
     if (!supported || starting) return;
     setStarting(true);
+    setLowLightAvailable(false);
     setStatus("Starting WebXR...");
 
     try {
       const handles = await initWebXR(canvasRef.current, overlayRef.current, setStatus, modelRef, reticleRef);
+      handles.onLowLightAvailable = setLowLightAvailable;
       cleanupRef.current = handles;
       setStatus("Move slowly. Tap the floor when the ring appears.");
       console.log("[WebXR] Surface mode started");
@@ -127,6 +137,11 @@ function WebXRSurfaceMode({ onBack }) {
             </button>
           )}
           {starting && <button onClick={() => cleanupRef.current?.reset?.()}>Reset</button>}
+          {starting && lowLightAvailable && (
+            <button onClick={() => cleanupRef.current?.placeWithoutSurface?.()}>
+              Low-Light Place
+            </button>
+          )}
         </div>
       </div>
     </div>
@@ -144,7 +159,7 @@ async function initWebXR(canvas, overlayRoot, setStatus, modelRef, reticleRef) {
   renderer.domElement.style.background = "transparent";
   renderer.setClearColor(0x000000, 0);
   renderer.setClearAlpha(0);
-  renderer.setPixelRatio(Math.min(window.devicePixelRatio || 1, 2));
+  renderer.setPixelRatio(Math.min(window.devicePixelRatio || 1, 1.5));
   renderer.setSize(window.innerWidth, window.innerHeight, false);
   renderer.outputColorSpace = THREE.SRGBColorSpace;
   renderer.shadowMap.enabled = true;
@@ -155,7 +170,8 @@ async function initWebXR(canvas, overlayRoot, setStatus, modelRef, reticleRef) {
   const camera = new THREE.PerspectiveCamera();
 
   // Apply the same moody cinematic lighting and drop-shadow physics to WebXR
-  scene.add(new THREE.AmbientLight(0x404050, 0.6));
+  scene.add(new THREE.AmbientLight(0x606070, 0.85));
+  scene.add(new THREE.HemisphereLight(0xffffff, 0x34343f, 0.7));
   const light = new THREE.DirectionalLight(0xfff0dd, 3.5);
   light.position.set(0, 10, 0); // Overhead for perfect drop shadow
   light.castShadow = true;
@@ -165,8 +181,8 @@ async function initWebXR(canvas, overlayRoot, setStatus, modelRef, reticleRef) {
   light.shadow.camera.bottom = -10;
   light.shadow.camera.near = 0.5;
   light.shadow.camera.far = 25;
-  light.shadow.mapSize.width = 2048;
-  light.shadow.mapSize.height = 2048;
+  light.shadow.mapSize.width = 1024;
+  light.shadow.mapSize.height = 1024;
   light.shadow.bias = -0.0005;
   light.shadow.radius = 1.5;
   scene.add(light);
@@ -176,9 +192,9 @@ async function initWebXR(canvas, overlayRoot, setStatus, modelRef, reticleRef) {
   scene.add(model);
   modelRef.current = model;
 
-  const surfaceGroup = createSimulatorSurface();
-  surfaceGroup.visible = false;
-  scene.add(surfaceGroup);
+  const shadowSurface = createWebXRShadowSurface();
+  shadowSurface.visible = false;
+  scene.add(shadowSurface);
 
   const reticle = new THREE.Mesh(
     new THREE.RingGeometry(0.08, 0.105, 32).rotateX(-Math.PI / 2),
@@ -188,10 +204,30 @@ async function initWebXR(canvas, overlayRoot, setStatus, modelRef, reticleRef) {
   reticle.visible = false;
   scene.add(reticle);
   reticleRef.current = reticle;
+  const reticlePosition = new THREE.Vector3();
+  const reticleQuaternion = new THREE.Quaternion();
+  const reticleScale = new THREE.Vector3();
+  const hitPosition = new THREE.Vector3();
+  const hitQuaternion = new THREE.Quaternion();
+  const hitScale = new THREE.Vector3();
+  const hitMatrix = new THREE.Matrix4();
+  const cameraPosition = new THREE.Vector3();
+  const cameraDirection = new THREE.Vector3();
+  const fallbackPosition = new THREE.Vector3();
+  const fallbackQuaternion = new THREE.Quaternion();
+  const fallbackScale = new THREE.Vector3(1, 1, 1);
+  const yAxis = new THREE.Vector3(0, 1, 0);
+  let stableHitFrames = 0;
+  let missedHitFrames = 0;
+  let hadStableHit = false;
+  let lastTrackingHint = 0;
+  let lowLightFallbackShown = false;
+  let scanStartTime = performance.now();
+  let placementArmedAt = performance.now() + WEBXR_TAP_ARM_DELAY;
 
   const sessionInit = { requiredFeatures: ["hit-test"] };
   if (overlayRoot) {
-    sessionInit.optionalFeatures = ["dom-overlay"];
+    sessionInit.optionalFeatures = ["dom-overlay", "light-estimation"];
     sessionInit.domOverlay = { root: overlayRoot };
   }
 
@@ -209,22 +245,46 @@ async function initWebXR(canvas, overlayRoot, setStatus, modelRef, reticleRef) {
 
   let isPlaced = false;
 
-  function placeModel() {
-    if (!reticle.visible || isPlaced) return;
-    
-    model.position.setFromMatrixPosition(reticle.matrix);
-    model.quaternion.setFromRotationMatrix(reticle.matrix);
-    surfaceGroup.position.copy(model.position);
-    surfaceGroup.quaternion.copy(model.quaternion);
-    surfaceGroup.visible = true;
+  function finishPlacement(position, quaternion, message) {
+    model.position.copy(position);
+    model.quaternion.copy(quaternion);
+    shadowSurface.position.copy(model.position);
+    shadowSurface.quaternion.copy(model.quaternion);
+    shadowSurface.visible = true;
     model.visible = true;
     isPlaced = true;
     reticle.visible = false;
-    setStatus("Dish locked in place. Use two fingers to zoom in/out.");
+    handles.onLowLightAvailable?.(false);
+    setStatus(message);
+  }
+
+  function placeModel() {
+    if (!reticle.visible || isPlaced) return;
+    if (performance.now() < placementArmedAt) return;
+
+    reticle.matrix.decompose(hitPosition, hitQuaternion, hitScale);
+    finishPlacement(hitPosition, hitQuaternion, "Dish locked in place. Use two fingers to zoom in/out.");
+  }
+
+  function placeWithoutSurface() {
+    if (isPlaced) return;
+
+    camera.getWorldPosition(cameraPosition);
+    camera.getWorldDirection(cameraDirection);
+    cameraDirection.y = 0;
+    if (cameraDirection.lengthSq() < 0.0001) cameraDirection.set(0, 0, -1);
+    cameraDirection.normalize();
+
+    fallbackPosition.copy(cameraPosition).addScaledVector(cameraDirection, LOW_LIGHT_MANUAL_DISTANCE);
+    fallbackPosition.y = cameraPosition.y - LOW_LIGHT_MANUAL_DROP;
+    fallbackQuaternion.setFromAxisAngle(yAxis, Math.atan2(cameraDirection.x, cameraDirection.z));
+    reticle.matrix.compose(fallbackPosition, fallbackQuaternion, fallbackScale);
+    finishPlacement(fallbackPosition, fallbackQuaternion, "Placed with low-light assist. Use two fingers to zoom in/out.");
   }
 
   function onPointerDown(event) {
     if (event.target !== canvas) return;
+    if (performance.now() < placementArmedAt) return;
     placeModel();
   }
 
@@ -260,22 +320,7 @@ async function initWebXR(canvas, overlayRoot, setStatus, modelRef, reticleRef) {
   window.addEventListener("touchstart", onTouchStart);
   window.addEventListener("touchmove", onTouchMove);
 
-  renderer.setAnimationLoop((_, frame) => {
-    renderer.setClearAlpha(0);
-    if (frame) {
-      const hits = frame.getHitTestResults(hitTestSource);
-      if (hits.length > 0 && !isPlaced) {
-        const pose = hits[0].getPose(referenceSpace);
-        reticle.visible = true;
-        reticle.matrix.fromArray(pose.transform.matrix);
-      } else {
-        reticle.visible = false;
-      }
-    }
-    renderer.render(scene, camera);
-  });
-
-  return {
+  const handles = {
     cleanup: () => {
       renderer.setAnimationLoop(null);
       window.removeEventListener("resize", resize);
@@ -292,11 +337,72 @@ async function initWebXR(canvas, overlayRoot, setStatus, modelRef, reticleRef) {
     },
     reset: () => {
       isPlaced = false;
+      stableHitFrames = 0;
+      missedHitFrames = 0;
+      hadStableHit = false;
+      lowLightFallbackShown = false;
+      scanStartTime = performance.now();
+      placementArmedAt = performance.now() + WEBXR_TAP_ARM_DELAY;
+      handles.onLowLightAvailable?.(false);
       if (modelRef.current) modelRef.current.visible = false;
-      surfaceGroup.visible = false;
+      shadowSurface.visible = false;
       setStatus("Move slowly. Tap the floor when the ring appears.");
-    }
+    },
+    placeWithoutSurface,
+    onLowLightAvailable: null,
   };
+
+  renderer.setAnimationLoop((_, frame) => {
+    renderer.setClearAlpha(0);
+    if (frame) {
+      const hits = frame.getHitTestResults(hitTestSource);
+      if (hits.length > 0 && !isPlaced) {
+        missedHitFrames = 0;
+        const pose = hits[0].getPose(referenceSpace);
+        hitMatrix.fromArray(pose.transform.matrix);
+        hitMatrix.decompose(hitPosition, hitQuaternion, hitScale);
+
+        if (!reticle.visible) {
+          reticlePosition.copy(hitPosition);
+          reticleQuaternion.copy(hitQuaternion);
+          reticleScale.copy(hitScale);
+        } else {
+          reticle.matrix.decompose(reticlePosition, reticleQuaternion, reticleScale);
+          reticlePosition.lerp(hitPosition, 0.18);
+          reticleQuaternion.slerp(hitQuaternion, 0.18);
+          reticleScale.lerp(hitScale, 0.18);
+        }
+
+        stableHitFrames = Math.min(stableHitFrames + 1, 8);
+        reticle.visible = stableHitFrames >= 4;
+        reticle.matrix.compose(reticlePosition, reticleQuaternion, reticleScale);
+        if (reticle.visible && !hadStableHit) {
+          hadStableHit = true;
+          handles.onLowLightAvailable?.(false);
+          setStatus("Surface found. Tap the floor to lock the dish.");
+        }
+      } else {
+        missedHitFrames = Math.min(missedHitFrames + 1, 12);
+        if (missedHitFrames >= 6) {
+          stableHitFrames = 0;
+          reticle.visible = false;
+        }
+        const now = performance.now();
+        if (!isPlaced && now - lastTrackingHint > 1600) {
+          lastTrackingHint = now;
+          setStatus(lowLightFallbackShown ? "Low light assist is ready if the surface is not detected." : "Move slowly over a textured floor or table.");
+        }
+        if (!isPlaced && !lowLightFallbackShown && now - scanStartTime > LOW_LIGHT_FALLBACK_DELAY) {
+          lowLightFallbackShown = true;
+          handles.onLowLightAvailable?.(true);
+          setStatus("Low-light assist is ready. Use it if the ring does not appear.");
+        }
+      }
+    }
+    renderer.render(scene, camera);
+  });
+
+  return handles;
 }
 
 function NativeModelViewerMode({ onBack }) {
@@ -331,6 +437,25 @@ function NativeModelViewerMode({ onBack }) {
       active = false;
     };
   }, []);
+
+  useEffect(() => {
+    const viewer = modelViewerRef.current;
+    if (!viewer) return;
+
+    function onArStatus(event) {
+      const arStatus = event.detail?.status;
+      if (arStatus === "session-started") {
+        setStatus("Scanning surface. Move slowly and aim at textured areas.");
+      } else if (arStatus === "failed") {
+        setStatus("Surface tracking failed. Try a textured spot or use the simulator placement.");
+      } else if (arStatus === "not-presenting") {
+        setStatus("Tap anywhere on the floor to place the dish.");
+      }
+    }
+
+    viewer.addEventListener("ar-status", onArStatus);
+    return () => viewer.removeEventListener("ar-status", onArStatus);
+  }, [scriptReady]);
 
   useEffect(() => {
     let active = true;
@@ -371,7 +496,7 @@ function NativeModelViewerMode({ onBack }) {
           src={MODEL_URL}
           alt="Bong Kebab"
           ar
-          ar-modes="webxr scene-viewer quick-look"
+          ar-modes="scene-viewer quick-look webxr"
           ar-placement="floor"
           ar-scale="fixed"
           scale={scaleAttribute}
@@ -386,7 +511,7 @@ function NativeModelViewerMode({ onBack }) {
           xr-environment
           shadow-intensity={SIMULATOR_SHADOW_INTENSITY}
           shadow-softness={SIMULATOR_SHADOW_SOFTNESS}
-          exposure="1"
+          exposure="1.35"
           className="native-viewer__ar-host"
         >
           <button slot="ar-button" className="native-viewer__hidden-ar-button">Open AR</button>
@@ -399,6 +524,9 @@ function NativeModelViewerMode({ onBack }) {
         {placed && <button onClick={() => cleanupRef.current?.reset()}>Reset Position</button>}
         <button onClick={launchRealSurfaceAR} disabled={!scriptReady}>
           View on Real Surface
+        </button>
+        <button onClick={() => setStatus("Use the simulator view when native AR cannot detect a floor in low light.")}>
+          Low-Light Help
         </button>
       </div>
     </div>
@@ -421,6 +549,20 @@ function MarkerARMode({ onBack }) {
 }
 
 async function getModelViewerScale() {
+  if (!modelViewerScalePromise) {
+    modelViewerScalePromise = preloadModel().then(({ maxAxis }) => (NORMALIZED_MODEL_SIZE / maxAxis) * MODEL_SCALE);
+  }
+  return modelViewerScalePromise;
+}
+
+function preloadModel() {
+  if (!modelAssetPromise) {
+    modelAssetPromise = loadModelAsset();
+  }
+  return modelAssetPromise;
+}
+
+async function loadModelAsset() {
   const dracoLoader = new DRACOLoader();
   dracoLoader.setDecoderPath("/draco/gltf/");
   dracoLoader.setDecoderConfig({ type: "wasm" });
@@ -433,9 +575,7 @@ async function getModelViewerScale() {
   const box = new THREE.Box3().setFromObject(gltf.scene);
   const size = box.getSize(new THREE.Vector3());
   const maxAxis = Math.max(size.x, size.y, size.z) || 1;
-  disposeWorld(gltf.scene);
-
-  return (NORMALIZED_MODEL_SIZE / maxAxis) * MODEL_SCALE;
+  return { scene: gltf.scene, maxAxis };
 }
 
 function formatVectorScale(scale) {
@@ -445,16 +585,9 @@ function formatVectorScale(scale) {
 }
 
 async function loadModel() {
-  const dracoLoader = new DRACOLoader();
-  dracoLoader.setDecoderPath("/draco/gltf/");
-  dracoLoader.setDecoderConfig({ type: "wasm" });
-
-  const loader = new GLTFLoader();
-  loader.setDRACOLoader(dracoLoader);
-  const gltf = await loader.loadAsync(MODEL_URL);
-  dracoLoader.dispose();
-
-  const model = gltf.scene;
+  const asset = await preloadModel();
+  const model = asset.scene.clone(true);
+  cloneModelResources(model);
   normalizeModel(model);
   model.scale.multiplyScalar(MODEL_SCALE);
   model.traverse((child) => {
@@ -464,6 +597,18 @@ async function loadModel() {
     if (child.material) child.material.needsUpdate = true;
   });
   return model;
+}
+
+function cloneModelResources(model) {
+  model.traverse((child) => {
+    if (!child.isMesh) return;
+    if (child.geometry) child.geometry = child.geometry.clone();
+    if (Array.isArray(child.material)) {
+      child.material = child.material.map((material) => material.clone());
+    } else if (child.material) {
+      child.material = child.material.clone();
+    }
+  });
 }
 
 function normalizeModel(model) {
@@ -508,6 +653,22 @@ function createSimulatorSurface() {
   grid.position.y = 0.001;
   surface.add(grid);
 
+  return surface;
+}
+
+function createWebXRShadowSurface() {
+  const surface = new THREE.Group();
+  const shadowGeo = new THREE.PlaneGeometry(3, 3);
+  const shadowMat = new THREE.ShadowMaterial({
+    color: 0x000000,
+    opacity: 0.24,
+    transparent: true,
+    depthWrite: false,
+  });
+  const shadow = new THREE.Mesh(shadowGeo, shadowMat);
+  shadow.rotation.x = -Math.PI / 2;
+  shadow.receiveShadow = true;
+  surface.add(shadow);
   return surface;
 }
 
