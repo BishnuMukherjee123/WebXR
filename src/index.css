@@ -117,6 +117,14 @@ button {
   background: transparent;
 }
 
+.xr-overlay {
+  position: fixed;
+  inset: 0;
+  z-index: 12;
+  background: transparent;
+  pointer-events: none;
+}
+
 .ar-stage__prestart {
   position: fixed;
   inset: 0;

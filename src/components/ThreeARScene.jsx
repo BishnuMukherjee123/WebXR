@@ -35,17 +35,17 @@ function HomeScreen({ onMode }) {
       <p>Use the simulator to tune scale and shadows, then launch real surface AR on a supported phone.</p>
 
       <div className="ar-mode-list">
-        <button className="ar-mode-card is-primary" onClick={() => onMode("native")}>
+        <button className="ar-mode-card is-primary" onClick={() => onMode("webxr")}>
           <span>Real Surface AR</span>
-          <small>Model Viewer places the dish on a detected real table or floor.</small>
+          <small>Custom Three.js WebXR uses the same floor, grid, shadows, and tap lock as the simulator.</small>
         </button>
         <button className="ar-mode-card" onClick={() => onMode("preview")}>
           <span>Surface Simulator</span>
           <small>Fake Three.js floor for adjusting size, lighting, and shadows.</small>
         </button>
-        <button className="ar-mode-card" onClick={() => onMode("webxr")}>
-          <span>WebXR Hit-Test</span>
-          <small>Experimental browser-only hit-test path for devices with working WebXR passthrough.</small>
+        <button className="ar-mode-card" onClick={() => onMode("native")}>
+          <span>Model Viewer Fallback</span>
+          <small>Native AR launcher for devices where browser WebXR passthrough fails.</small>
         </button>
         <button className="ar-mode-card" onClick={() => onMode("marker")}>
           <span>Browser Marker AR</span>
@@ -58,6 +58,7 @@ function HomeScreen({ onMode }) {
 
 function WebXRSurfaceMode({ onBack }) {
   const canvasRef = useRef(null);
+  const overlayRef = useRef(null);
   const cleanupRef = useRef(null);
   const modelRef = useRef(null);
   const reticleRef = useRef(null);
@@ -90,7 +91,7 @@ function WebXRSurfaceMode({ onBack }) {
     setStatus("Starting WebXR...");
 
     try {
-      const handles = await initWebXR(canvasRef.current, setStatus, modelRef, reticleRef);
+      const handles = await initWebXR(canvasRef.current, overlayRef.current, setStatus, modelRef, reticleRef);
       cleanupRef.current = handles;
       setStatus("Move slowly. Tap the floor when the ring appears.");
       console.log("[WebXR] Surface mode started");
@@ -114,23 +115,25 @@ function WebXRSurfaceMode({ onBack }) {
           </p>
         </div>
       )}
-      <div className="ar-topbar">
-        <button onClick={onBack}>Back</button>
-        <div>{status}</div>
-      </div>
-      <div className="ar-actions">
-        {!starting && (
-          <button onClick={startWebXR} disabled={!supported}>
-            Start Surface AR
-          </button>
-        )}
-        {starting && <button onClick={() => cleanupRef.current?.reset?.()}>Reset</button>}
+      <div ref={overlayRef} className="xr-overlay">
+        <div className="ar-topbar">
+          <button onClick={onBack}>Back</button>
+          <div>{status}</div>
+        </div>
+        <div className="ar-actions">
+          {!starting && (
+            <button onClick={startWebXR} disabled={!supported}>
+              Start Surface AR
+            </button>
+          )}
+          {starting && <button onClick={() => cleanupRef.current?.reset?.()}>Reset</button>}
+        </div>
       </div>
     </div>
   );
 }
 
-async function initWebXR(canvas, setStatus, modelRef, reticleRef) {
+async function initWebXR(canvas, overlayRoot, setStatus, modelRef, reticleRef) {
   const renderer = new THREE.WebGLRenderer({
     canvas,
     alpha: true,
@@ -173,6 +176,10 @@ async function initWebXR(canvas, setStatus, modelRef, reticleRef) {
   scene.add(model);
   modelRef.current = model;
 
+  const surfaceGroup = createSimulatorSurface();
+  surfaceGroup.visible = false;
+  scene.add(surfaceGroup);
+
   const reticle = new THREE.Mesh(
     new THREE.RingGeometry(0.08, 0.105, 32).rotateX(-Math.PI / 2),
     new THREE.MeshBasicMaterial({ color: 0xffffff }),
@@ -182,11 +189,13 @@ async function initWebXR(canvas, setStatus, modelRef, reticleRef) {
   scene.add(reticle);
   reticleRef.current = reticle;
 
-  const session = await navigator.xr.requestSession("immersive-ar", {
-    requiredFeatures: ["hit-test"],
-    optionalFeatures: ["dom-overlay"],
-    domOverlay: { root: document.body },
-  });
+  const sessionInit = { requiredFeatures: ["hit-test"] };
+  if (overlayRoot) {
+    sessionInit.optionalFeatures = ["dom-overlay"];
+    sessionInit.domOverlay = { root: overlayRoot };
+  }
+
+  const session = await navigator.xr.requestSession("immersive-ar", sessionInit);
   renderer.xr.setReferenceSpaceType("local");
   await renderer.xr.setSession(session);
 
@@ -205,10 +214,18 @@ async function initWebXR(canvas, setStatus, modelRef, reticleRef) {
     
     model.position.setFromMatrixPosition(reticle.matrix);
     model.quaternion.setFromRotationMatrix(reticle.matrix);
+    surfaceGroup.position.copy(model.position);
+    surfaceGroup.quaternion.copy(model.quaternion);
+    surfaceGroup.visible = true;
     model.visible = true;
     isPlaced = true;
     reticle.visible = false;
-    setStatus("Locked! Use two fingers to scale the dish.");
+    setStatus("Dish locked in place. Use two fingers to zoom in/out.");
+  }
+
+  function onPointerDown(event) {
+    if (event.target !== canvas) return;
+    placeModel();
   }
 
   // Touch pinch to scale in WebXR
@@ -238,6 +255,7 @@ async function initWebXR(canvas, setStatus, modelRef, reticleRef) {
   }
 
   session.addEventListener("select", placeModel);
+  canvas.addEventListener("pointerdown", onPointerDown);
   window.addEventListener("resize", resize);
   window.addEventListener("touchstart", onTouchStart);
   window.addEventListener("touchmove", onTouchMove);
@@ -263,6 +281,7 @@ async function initWebXR(canvas, setStatus, modelRef, reticleRef) {
       window.removeEventListener("resize", resize);
       window.removeEventListener("touchstart", onTouchStart);
       window.removeEventListener("touchmove", onTouchMove);
+      canvas.removeEventListener("pointerdown", onPointerDown);
       session.removeEventListener("select", placeModel);
       hitTestSource.cancel?.();
       if (session.end) session.end().catch(() => {});
@@ -274,6 +293,7 @@ async function initWebXR(canvas, setStatus, modelRef, reticleRef) {
     reset: () => {
       isPlaced = false;
       if (modelRef.current) modelRef.current.visible = false;
+      surfaceGroup.visible = false;
       setStatus("Move slowly. Tap the floor when the ring appears.");
     }
   };
@@ -470,6 +490,27 @@ function disposeWorld(scene) {
   });
 }
 
+function createSimulatorSurface() {
+  const surface = new THREE.Group();
+
+  const floorGeo = new THREE.PlaneGeometry(100, 100);
+  const floorMat = new THREE.MeshStandardMaterial({
+    color: 0x555555,
+    roughness: 0.9,
+    metalness: 0.1,
+  });
+  const floor = new THREE.Mesh(floorGeo, floorMat);
+  floor.rotation.x = -Math.PI / 2;
+  floor.receiveShadow = true;
+  surface.add(floor);
+
+  const grid = new THREE.GridHelper(100, 200, 0x888888, 0x333333);
+  grid.position.y = 0.001;
+  surface.add(grid);
+
+  return surface;
+}
+
 function Desktop3DMode({ onBack }) {
   const canvasRef = useRef(null);
   const cleanupRef = useRef(null);
@@ -543,21 +584,9 @@ async function initDesktop3D(canvas, setStatus, setPlaced) {
   light.shadow.radius = 1.5; // Slightly sharper, pronounced shadow edge to match reference
   scene.add(light);
 
-  const floorGeo = new THREE.PlaneGeometry(100, 100);
-  const floorMat = new THREE.MeshStandardMaterial({ 
-    color: 0x555555, // Darkened floor to match the moody reference picture
-    roughness: 0.9,
-    metalness: 0.1
-  });
-  const floor = new THREE.Mesh(floorGeo, floorMat);
-  floor.rotation.x = -Math.PI / 2;
-  floor.receiveShadow = true;
-  scene.add(floor);
-
-  // Add grid for better depth perception
-  const grid = new THREE.GridHelper(100, 200, 0x888888, 0x333333);
-  grid.position.y = 0.001;
-  scene.add(grid);
+  const surface = createSimulatorSurface();
+  scene.add(surface);
+  const floor = surface.children.find((child) => child.isMesh);
 
   const model = await loadModel();
   model.position.set(0, 0, -1);
