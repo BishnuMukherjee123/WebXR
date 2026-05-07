@@ -5,6 +5,8 @@ import { DRACOLoader } from "three/examples/jsm/loaders/DRACOLoader.js";
 
 const MODEL_URL = "/models/10.glb";
 const MODEL_SCALE = 0.8;
+const NORMALIZED_MODEL_SIZE = 1.25;
+const FALLBACK_MODEL_VIEWER_SCALE = 0.08;
 
 export default function ThreeARScene() {
   const [mode, setMode] = useState("home");
@@ -28,17 +30,17 @@ function HomeScreen({ onMode }) {
       <p>Use the simulator to tune scale and shadows, then launch real surface AR on a supported phone.</p>
 
       <div className="ar-mode-list">
-        <button className="ar-mode-card is-primary" onClick={() => onMode("webxr")}>
+        <button className="ar-mode-card is-primary" onClick={() => onMode("native")}>
           <span>Real Surface AR</span>
-          <small>WebXR hit-test places the dish on a detected real table or floor.</small>
+          <small>Model Viewer places the dish on a detected real table or floor.</small>
         </button>
         <button className="ar-mode-card" onClick={() => onMode("preview")}>
           <span>Surface Simulator</span>
           <small>Fake Three.js floor for adjusting size, lighting, and shadows.</small>
         </button>
-        <button className="ar-mode-card" onClick={() => onMode("native")}>
-          <span>Model Viewer AR</span>
-          <small>Uses model-viewer surface placement where the platform supports it.</small>
+        <button className="ar-mode-card" onClick={() => onMode("webxr")}>
+          <span>WebXR Hit-Test</span>
+          <small>Experimental browser-only hit-test path for devices with working WebXR passthrough.</small>
         </button>
         <button className="ar-mode-card" onClick={() => onMode("marker")}>
           <span>Browser Marker AR</span>
@@ -274,6 +276,7 @@ async function initWebXR(canvas, setStatus, modelRef, reticleRef) {
 
 function NativeModelViewerMode({ onBack }) {
   const [scriptReady, setScriptReady] = useState(Boolean(customElements.get("model-viewer")));
+  const [modelViewerScale, setModelViewerScale] = useState(FALLBACK_MODEL_VIEWER_SCALE);
 
   useEffect(() => {
     if (customElements.get("model-viewer")) return;
@@ -285,6 +288,21 @@ function NativeModelViewerMode({ onBack }) {
     script.onerror = () => console.error("[model-viewer] Could not load model-viewer script");
     document.head.appendChild(script);
   }, []);
+
+  useEffect(() => {
+    let active = true;
+    getModelViewerScale()
+      .then((scale) => {
+        if (active) setModelViewerScale(scale);
+      })
+      .catch((err) => console.warn("[model-viewer] Could not calculate normalized scale", err));
+
+    return () => {
+      active = false;
+    };
+  }, []);
+
+  const scaleAttribute = formatVectorScale(modelViewerScale);
 
   return (
     <div className="native-viewer">
@@ -298,12 +316,19 @@ function NativeModelViewerMode({ onBack }) {
           src={MODEL_URL}
           alt="Bong Kebab"
           ar
-          ar-modes="webxr scene-viewer quick-look"
+          ar-modes="scene-viewer quick-look"
           ar-placement="floor"
-          ar-scale="auto"
+          ar-scale="fixed"
+          scale={scaleAttribute}
+          camera-orbit="0deg 64deg 2.4m"
+          camera-target="0m 0.35m 0m"
+          field-of-view="28deg"
           camera-controls
           auto-rotate
-          shadow-intensity="1"
+          environment-image="neutral"
+          xr-environment
+          shadow-intensity="1.35"
+          shadow-softness="0.45"
           exposure="1"
           className="native-viewer__model"
         >
@@ -316,7 +341,7 @@ function NativeModelViewerMode({ onBack }) {
       )}
 
       <div className="native-viewer__note">
-        Android may open Scene Viewer. iPhone needs a USDZ file for full Quick Look AR.
+        Same normalized scale as the simulator. Android uses Scene Viewer first to avoid the black WebXR passthrough bug.
       </div>
     </div>
   );
@@ -335,6 +360,30 @@ function MarkerARMode({ onBack }) {
       </a>
     </div>
   );
+}
+
+async function getModelViewerScale() {
+  const dracoLoader = new DRACOLoader();
+  dracoLoader.setDecoderPath("/draco/gltf/");
+  dracoLoader.setDecoderConfig({ type: "wasm" });
+
+  const loader = new GLTFLoader();
+  loader.setDRACOLoader(dracoLoader);
+  const gltf = await loader.loadAsync(MODEL_URL);
+  dracoLoader.dispose();
+
+  const box = new THREE.Box3().setFromObject(gltf.scene);
+  const size = box.getSize(new THREE.Vector3());
+  const maxAxis = Math.max(size.x, size.y, size.z) || 1;
+  disposeWorld(gltf.scene);
+
+  return (NORMALIZED_MODEL_SIZE / maxAxis) * MODEL_SCALE;
+}
+
+function formatVectorScale(scale) {
+  const safeScale = Number.isFinite(scale) && scale > 0 ? scale : FALLBACK_MODEL_VIEWER_SCALE;
+  const value = safeScale.toFixed(5);
+  return `${value} ${value} ${value}`;
 }
 
 async function loadModel() {
@@ -363,7 +412,7 @@ function normalizeModel(model) {
   const box = new THREE.Box3().setFromObject(model);
   const size = box.getSize(new THREE.Vector3());
   const maxAxis = Math.max(size.x, size.y, size.z) || 1;
-  model.scale.setScalar(1.25 / maxAxis);
+  model.scale.setScalar(NORMALIZED_MODEL_SIZE / maxAxis);
   model.updateWorldMatrix(true, true);
 
   const scaledBox = new THREE.Box3().setFromObject(model);
