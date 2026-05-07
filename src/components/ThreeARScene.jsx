@@ -445,7 +445,7 @@ function NativeModelViewerMode({ onBack }) {
     function onArStatus(event) {
       const arStatus = event.detail?.status;
       if (arStatus === "session-started") {
-        setStatus("Scanning surface. Move slowly and aim at textured areas.");
+        setStatus("Scan the surface, then tap to place the dish.");
       } else if (arStatus === "failed") {
         setStatus("Surface tracking failed. Try a textured spot or use the simulator placement.");
       } else if (arStatus === "not-presenting") {
@@ -496,7 +496,7 @@ function NativeModelViewerMode({ onBack }) {
           src={MODEL_URL}
           alt="Bong Kebab"
           ar
-          ar-modes="scene-viewer quick-look webxr"
+          ar-modes="webxr quick-look"
           ar-placement="floor"
           ar-scale="fixed"
           scale={scaleAttribute}
@@ -506,7 +506,7 @@ function NativeModelViewerMode({ onBack }) {
           min-field-of-view="18deg"
           max-field-of-view="65deg"
           camera-controls
-          interaction-prompt="auto"
+          interaction-prompt="none"
           environment-image="neutral"
           xr-environment
           shadow-intensity={SIMULATOR_SHADOW_INTENSITY}
@@ -523,7 +523,7 @@ function NativeModelViewerMode({ onBack }) {
       <div className="ar-actions ar-actions--stack">
         {placed && <button onClick={() => cleanupRef.current?.reset()}>Reset Position</button>}
         <button onClick={launchRealSurfaceAR} disabled={!scriptReady}>
-          View on Real Surface
+          Start Browser AR
         </button>
         <button onClick={() => setStatus("Use the simulator view when native AR cannot detect a floor in low light.")}>
           Low-Light Help
