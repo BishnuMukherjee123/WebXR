@@ -228,14 +228,44 @@ button {
 }
 
 .native-viewer {
+  position: fixed;
   display: grid;
   grid-template-rows: 1fr auto;
+  background: #1a1a24;
+}
+
+.native-viewer::before,
+.native-viewer::after {
+  position: fixed;
+  inset: 0;
+  content: "";
+  pointer-events: none;
+}
+
+.native-viewer::before {
+  z-index: 0;
+  background:
+    linear-gradient(180deg, rgba(26, 26, 36, 0) 0%, rgba(26, 26, 36, 0) 43%, rgba(85, 85, 85, 0.9) 43%, #343438 100%),
+    repeating-linear-gradient(90deg, rgba(136, 136, 136, 0.34) 0 1px, transparent 1px 42px),
+    repeating-linear-gradient(0deg, rgba(51, 51, 51, 0.68) 0 1px, transparent 1px 42px);
+  background-position: 0 0, center 43vh, center 43vh;
+  background-size: auto, 42px 42px, 42px 42px;
+}
+
+.native-viewer::after {
+  z-index: 0;
+  background:
+    radial-gradient(ellipse at 50% 62%, rgba(255, 240, 221, 0.2), transparent 26%),
+    linear-gradient(180deg, rgba(26, 26, 36, 0.94) 0%, rgba(26, 26, 36, 0.82) 43%, transparent 43%);
 }
 
 .native-viewer__model {
+  position: relative;
+  z-index: 1;
   width: 100%;
   height: 100%;
-  background: #101214;
+  background: transparent;
+  --poster-color: transparent;
 }
 
 .native-viewer__ar-button {
@@ -261,9 +291,12 @@ button {
 }
 
 .native-viewer__note {
+  position: relative;
+  z-index: 2;
   min-height: 62px;
-  background: #101214;
-  font-size: 13px;
+  padding: 12px 18px;
+  background: rgba(16, 18, 20, 0.86);
+  font-size: 12px;
 }
 
 .marker-mode iframe {

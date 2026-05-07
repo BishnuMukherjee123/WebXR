@@ -7,6 +7,11 @@ const MODEL_URL = "/models/10.glb";
 const MODEL_SCALE = 0.8;
 const NORMALIZED_MODEL_SIZE = 1.25;
 const FALLBACK_MODEL_VIEWER_SCALE = 0.08;
+const SIMULATOR_CAMERA_ORBIT = "0deg 66.8deg 3.8m";
+const SIMULATOR_CAMERA_TARGET = "0m 0.25m 0m";
+const SIMULATOR_FIELD_OF_VIEW = "50deg";
+const SIMULATOR_SHADOW_INTENSITY = "1.35";
+const SIMULATOR_SHADOW_SOFTNESS = "0.35";
 
 export default function ThreeARScene() {
   const [mode, setMode] = useState("home");
@@ -316,19 +321,21 @@ function NativeModelViewerMode({ onBack }) {
           src={MODEL_URL}
           alt="Bong Kebab"
           ar
-          ar-modes="scene-viewer quick-look"
+          ar-modes="webxr scene-viewer quick-look"
           ar-placement="floor"
           ar-scale="fixed"
           scale={scaleAttribute}
-          camera-orbit="0deg 64deg 2.4m"
-          camera-target="0m 0.35m 0m"
-          field-of-view="28deg"
+          camera-orbit={SIMULATOR_CAMERA_ORBIT}
+          camera-target={SIMULATOR_CAMERA_TARGET}
+          field-of-view={SIMULATOR_FIELD_OF_VIEW}
+          min-field-of-view="18deg"
+          max-field-of-view="65deg"
           camera-controls
-          auto-rotate
+          interaction-prompt="auto"
           environment-image="neutral"
           xr-environment
-          shadow-intensity="1.35"
-          shadow-softness="0.45"
+          shadow-intensity={SIMULATOR_SHADOW_INTENSITY}
+          shadow-softness={SIMULATOR_SHADOW_SOFTNESS}
           exposure="1"
           className="native-viewer__model"
         >
@@ -341,7 +348,7 @@ function NativeModelViewerMode({ onBack }) {
       )}
 
       <div className="native-viewer__note">
-        Same normalized scale as the simulator. Android uses Scene Viewer first to avoid the black WebXR passthrough bug.
+        Same normalized scale as the simulator. WebXR gives tap-to-place floor AR when the browser supports camera passthrough.
       </div>
     </div>
   );
