@@ -103,7 +103,7 @@ function WebXRSurfaceMode({ onBack }) {
       const handles = await initWebXR(canvasRef.current, overlayRef.current, setStatus, modelRef, reticleRef);
       handles.onLowLightAvailable = setLowLightAvailable;
       cleanupRef.current = handles;
-      setStatus("Move slowly. Tap the floor when the ring appears.");
+      setStatus(handles.scanStatus);
       console.log("[WebXR] Surface mode started");
     } catch (err) {
       console.error("[WebXR] Start failed", err);
@@ -148,7 +148,13 @@ function WebXRSurfaceMode({ onBack }) {
   );
 }
 
-async function initWebXR(canvas, overlayRoot, setStatus, modelRef, reticleRef) {
+async function initWebXR(canvas, overlayRoot, setStatus, modelRef, reticleRef, options = {}) {
+  const scanStatus = options.scanStatus || "Move slowly. Tap the floor when the ring appears.";
+  const foundStatus = options.foundStatus || "Surface found. Tap the floor to lock the dish.";
+  const trackingStatus = options.trackingStatus || "Move slowly over a textured floor or table.";
+  const placedStatus = options.placedStatus || "Dish locked in place. Use two fingers to zoom in/out.";
+  const lowLightPlacedStatus = options.lowLightPlacedStatus || "Placed with low-light assist. Use two fingers to zoom in/out.";
+
   const renderer = new THREE.WebGLRenderer({
     canvas,
     alpha: true,
@@ -263,7 +269,7 @@ async function initWebXR(canvas, overlayRoot, setStatus, modelRef, reticleRef) {
     if (performance.now() < placementArmedAt) return;
 
     reticle.matrix.decompose(hitPosition, hitQuaternion, hitScale);
-    finishPlacement(hitPosition, hitQuaternion, "Dish locked in place. Use two fingers to zoom in/out.");
+    finishPlacement(hitPosition, hitQuaternion, placedStatus);
   }
 
   function placeWithoutSurface() {
@@ -279,7 +285,7 @@ async function initWebXR(canvas, overlayRoot, setStatus, modelRef, reticleRef) {
     fallbackPosition.y = cameraPosition.y - LOW_LIGHT_MANUAL_DROP;
     fallbackQuaternion.setFromAxisAngle(yAxis, Math.atan2(cameraDirection.x, cameraDirection.z));
     reticle.matrix.compose(fallbackPosition, fallbackQuaternion, fallbackScale);
-    finishPlacement(fallbackPosition, fallbackQuaternion, "Placed with low-light assist. Use two fingers to zoom in/out.");
+    finishPlacement(fallbackPosition, fallbackQuaternion, lowLightPlacedStatus);
   }
 
   function onPointerDown(event) {
@@ -346,10 +352,11 @@ async function initWebXR(canvas, overlayRoot, setStatus, modelRef, reticleRef) {
       handles.onLowLightAvailable?.(false);
       if (modelRef.current) modelRef.current.visible = false;
       shadowSurface.visible = false;
-      setStatus("Move slowly. Tap the floor when the ring appears.");
+      setStatus(scanStatus);
     },
     placeWithoutSurface,
     onLowLightAvailable: null,
+    scanStatus,
   };
 
   renderer.setAnimationLoop((_, frame) => {
@@ -379,7 +386,7 @@ async function initWebXR(canvas, overlayRoot, setStatus, modelRef, reticleRef) {
         if (reticle.visible && !hadStableHit) {
           hadStableHit = true;
           handles.onLowLightAvailable?.(false);
-          setStatus("Surface found. Tap the floor to lock the dish.");
+          setStatus(foundStatus);
         }
       } else {
         missedHitFrames = Math.min(missedHitFrames + 1, 12);
@@ -390,7 +397,7 @@ async function initWebXR(canvas, overlayRoot, setStatus, modelRef, reticleRef) {
         const now = performance.now();
         if (!isPlaced && now - lastTrackingHint > 1600) {
           lastTrackingHint = now;
-          setStatus(lowLightFallbackShown ? "Low light assist is ready if the surface is not detected." : "Move slowly over a textured floor or table.");
+          setStatus(lowLightFallbackShown ? "Low light assist is ready if the surface is not detected." : trackingStatus);
         }
         if (!isPlaced && !lowLightFallbackShown && now - scanStartTime > LOW_LIGHT_FALLBACK_DELAY) {
           lowLightFallbackShown = true;
@@ -407,12 +414,17 @@ async function initWebXR(canvas, overlayRoot, setStatus, modelRef, reticleRef) {
 
 function NativeModelViewerMode({ onBack }) {
   const canvasRef = useRef(null);
+  const overlayRef = useRef(null);
   const cleanupRef = useRef(null);
   const modelViewerRef = useRef(null);
+  const modelRef = useRef(null);
+  const reticleRef = useRef(null);
   const [scriptReady, setScriptReady] = useState(Boolean(customElements.get("model-viewer")));
   const [modelViewerScale, setModelViewerScale] = useState(FALLBACK_MODEL_VIEWER_SCALE);
   const [status, setStatus] = useState("Tap a surface to place the dish.");
   const [placed, setPlaced] = useState(false);
+  const [browserArRunning, setBrowserArRunning] = useState(false);
+  const [lowLightAvailable, setLowLightAvailable] = useState(false);
 
   useEffect(() => {
     if (customElements.get("model-viewer")) return;
@@ -477,24 +489,73 @@ function NativeModelViewerMode({ onBack }) {
 
   const scaleAttribute = formatVectorScale(modelViewerScale);
 
-  function launchRealSurfaceAR() {
-    if (!scriptReady || !modelViewerRef.current?.activateAR) {
-      setStatus("AR is still loading. Try again in a moment.");
+  async function launchRealSurfaceAR() {
+    if (browserArRunning) return;
+    if (!navigator.xr) {
+      setStatus("Browser AR is not supported on this device.");
       return;
     }
-    cleanupRef.current?.pause?.();
-    const activation = modelViewerRef.current.activateAR();
-    if (activation?.catch) {
-      activation.catch(() => cleanupRef.current?.resume?.());
+
+    setStatus("Starting browser AR...");
+    setLowLightAvailable(false);
+
+    try {
+      const ok = await navigator.xr.isSessionSupported("immersive-ar");
+      if (!ok) {
+        setStatus("Browser AR is not supported on this device.");
+        return;
+      }
+
+      cleanupRef.current?.cleanup?.();
+      cleanupRef.current = null;
+      setPlaced(false);
+      setBrowserArRunning(true);
+
+      const handles = await initWebXR(canvasRef.current, overlayRef.current, setStatus, modelRef, reticleRef, {
+        scanStatus: "Move slowly. Tap the wall when the ring appears.",
+        foundStatus: "Wall found. Tap the wall to lock the dish.",
+        trackingStatus: "Move slowly over a textured wall.",
+        placedStatus: "Dish locked on the wall. Use two fingers to zoom in/out.",
+        lowLightPlacedStatus: "Placed with low-light assist. Use two fingers to zoom in/out.",
+      });
+      handles.onLowLightAvailable = setLowLightAvailable;
+      cleanupRef.current = handles;
+      setStatus(handles.scanStatus);
+    } catch (err) {
+      console.error("[model-viewer fallback] Browser AR start failed", err);
+      setBrowserArRunning(false);
+      setStatus(err?.message || "Could not start browser AR.");
     }
   }
 
   return (
     <div className="native-viewer native-viewer--simulator">
       <canvas ref={canvasRef} className="ar-stage__canvas" />
-      <div className="ar-topbar">
-        <button onClick={onBack}>Back</button>
-        <div>{status}</div>
+      <div ref={overlayRef} className="xr-overlay">
+        <div className="ar-topbar">
+          <button onClick={onBack}>Back</button>
+          <div>{status}</div>
+        </div>
+
+        <div className="ar-actions ar-actions--stack">
+          {placed && <button onClick={() => cleanupRef.current?.reset()}>Reset Position</button>}
+          {browserArRunning && <button onClick={() => cleanupRef.current?.reset?.()}>Reset AR</button>}
+          {browserArRunning && lowLightAvailable && (
+            <button onClick={() => cleanupRef.current?.placeWithoutSurface?.()}>
+              Low-Light Place
+            </button>
+          )}
+          {!browserArRunning && (
+            <button onClick={launchRealSurfaceAR}>
+              Start Browser AR
+            </button>
+          )}
+          {!browserArRunning && (
+            <button onClick={() => setStatus("Use browser AR for tap-to-place wall placement.")}>
+              Low-Light Help
+            </button>
+          )}
+        </div>
       </div>
 
       {scriptReady ? (
@@ -527,15 +588,6 @@ function NativeModelViewerMode({ onBack }) {
         <div className="native-viewer__loading">Loading model-viewer...</div>
       )}
 
-      <div className="ar-actions ar-actions--stack">
-        {placed && <button onClick={() => cleanupRef.current?.reset()}>Reset Position</button>}
-        <button onClick={launchRealSurfaceAR} disabled={!scriptReady}>
-          Start Browser AR
-        </button>
-        <button onClick={() => setStatus("Use the simulator view when native AR cannot detect a floor in low light.")}>
-          Low-Light Help
-        </button>
-      </div>
     </div>
   );
 }
