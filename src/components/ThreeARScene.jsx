@@ -594,16 +594,77 @@ function NativeModelViewerMode({ onBack }) {
 }
 
 function MarkerARMode({ onBack }) {
+  const modelViewerRef = useRef(null);
+  const [scriptReady, setScriptReady] = useState(Boolean(customElements.get("model-viewer")));
+  const [status, setStatus] = useState("Tap 'Open AR' to place the model on a wall.");
+  const [arActive, setArActive] = useState(false);
+
+  // Inject model-viewer script once
+  useEffect(() => {
+    if (customElements.get("model-viewer")) return;
+    const script = document.createElement("script");
+    script.type = "module";
+    script.src = "https://unpkg.com/@google/model-viewer/dist/model-viewer.min.js";
+    script.onload = () => setScriptReady(true);
+    script.onerror = () => console.error("[marker-ar] Could not load model-viewer script");
+    document.head.appendChild(script);
+  }, []);
+
+  // Sync with model-viewer ar-status events
+  useEffect(() => {
+    const viewer = modelViewerRef.current;
+    if (!viewer) return;
+
+    function onArStatus(event) {
+      const s = event.detail?.status;
+      if (s === "session-started") {
+        setArActive(true);
+        setStatus("AR active — move your phone to scan the wall, then tap to place.");
+      } else if (s === "object-placed") {
+        setStatus("Model placed! Pinch to scale, drag to reposition.");
+      } else if (s === "failed") {
+        setArActive(false);
+        setStatus("AR failed. Check camera permissions and try again.");
+      } else if (s === "not-presenting") {
+        setArActive(false);
+        setStatus("Tap 'Open AR' to place the model on a wall.");
+      }
+    }
+
+    viewer.addEventListener("ar-status", onArStatus);
+    return () => viewer.removeEventListener("ar-status", onArStatus);
+  }, [scriptReady]);
+
   return (
-    <div className="marker-mode">
-      <iframe title="AR.js marker mode" src="/marker-ar.html" allow="camera; fullscreen; xr-spatial-tracking" />
-      <div className="ar-topbar">
+    <div className="native-viewer native-viewer--simulator">
+      {/* Top bar */}
+      <div className="ar-topbar" style={{ zIndex: 10 }}>
         <button onClick={onBack}>Back</button>
-        <div>Point camera at the Hiro marker</div>
+        <div>{status}</div>
       </div>
-      <a className="marker-mode__marker" href="https://raw.githubusercontent.com/AR-js-org/AR.js/master/data/images/hiro.png" target="_blank" rel="noreferrer">
-        Open Hiro marker
-      </a>
+
+      {scriptReady ? (
+        <model-viewer
+          ref={modelViewerRef}
+          src={MODEL_URL}
+          alt="A 3D model of some wall art"
+          ar
+          ar-modes="webxr quick-look"
+          ar-placement="wall"
+          camera-controls
+          touch-action="pan-y"
+          shadow-intensity="1"
+          shadow-softness="0.5"
+          exposure="1.2"
+          className="native-viewer__ar-host"
+        >
+          <button slot="ar-button" className="native-viewer__hidden-ar-button">
+            Open AR
+          </button>
+        </model-viewer>
+      ) : (
+        <div className="native-viewer__loading">Loading model-viewer…</div>
+      )}
     </div>
   );
 }
