@@ -112,6 +112,47 @@ button {
   touch-action: none;
 }
 
+.ar-stage__prestart {
+  position: fixed;
+  inset: 0;
+  z-index: 2;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  padding: 28px;
+  text-align: center;
+  background:
+    radial-gradient(circle at 50% 24%, rgba(255, 255, 255, 0.16), transparent 28%),
+    linear-gradient(150deg, #0b0f12 0%, #101010 58%, #241112 100%);
+}
+
+.ar-stage__prestart-badge {
+  display: grid;
+  width: 74px;
+  height: 74px;
+  margin-bottom: 22px;
+  place-items: center;
+  border: 1px solid rgba(255, 255, 255, 0.18);
+  border-radius: 50%;
+  background: rgba(255, 255, 255, 0.08);
+  font-size: 13px;
+  font-weight: 850;
+}
+
+.ar-stage__prestart h2 {
+  margin: 0 0 10px;
+  font-size: 26px;
+}
+
+.ar-stage__prestart p {
+  max-width: 340px;
+  margin: 0;
+  color: rgba(255, 255, 255, 0.68);
+  font-size: 14px;
+  line-height: 1.55;
+}
+
 .ar-topbar {
   position: fixed;
   top: max(14px, env(safe-area-inset-top));

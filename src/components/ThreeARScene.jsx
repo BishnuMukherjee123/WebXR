@@ -97,6 +97,16 @@ function WebXRSurfaceMode({ onBack }) {
   return (
     <div className="ar-stage">
       <canvas ref={canvasRef} className="ar-stage__canvas" />
+      {!starting && (
+        <div className="ar-stage__prestart">
+          <div className="ar-stage__prestart-badge">Surface AR</div>
+          <h2>Ready to scan</h2>
+          <p>
+            Tap Start to open the real AR camera. The camera feed appears only after the
+            WebXR session begins.
+          </p>
+        </div>
+      )}
       <div className="ar-topbar">
         <button onClick={onBack}>Back</button>
         <div>{status}</div>

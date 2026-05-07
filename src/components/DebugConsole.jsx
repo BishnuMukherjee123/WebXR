@@ -2,7 +2,7 @@ import { useEffect, useState } from "react";
 
 export default function DebugConsole() {
   const [logs, setLogs] = useState([]);
-  const [visible, setVisible] = useState(true);
+  const [visible, setVisible] = useState(false);
 
   useEffect(() => {
     // Provide append function other scripts can call
@@ -57,7 +57,7 @@ export default function DebugConsole() {
       </div>
       {visible && (
         <div style={{ width: 320, maxWidth: '86vw', maxHeight: '46vh', overflow: 'auto', background: 'rgba(0,0,0,0.7)', color: '#fff', fontSize: 12, padding: 8, borderRadius: 8 }}>
-          {logs.length === 0 && <div style={{ opacity: 0.6 }}>No logs yet - tap Launch AR</div>}
+          {logs.length === 0 && <div style={{ opacity: 0.6 }}>No logs yet</div>}
           {logs.map((l, i) => (
             <div key={i} style={{ marginBottom: 6, whiteSpace: 'pre-wrap', wordBreak: 'break-word' }}>
               <strong style={{ color: l.level === 'error' ? '#ff7777' : l.level === 'warn' ? '#ffd27f' : '#9fe7ff' }}>{l.level}</strong>
