@@ -411,7 +411,7 @@ function NativeModelViewerMode({ onBack }) {
   const modelViewerRef = useRef(null);
   const [scriptReady, setScriptReady] = useState(Boolean(customElements.get("model-viewer")));
   const [modelViewerScale, setModelViewerScale] = useState(FALLBACK_MODEL_VIEWER_SCALE);
-  const [status, setStatus] = useState("Tap anywhere on the floor to place the dish.");
+  const [status, setStatus] = useState("Tap a surface to place the dish.");
   const [placed, setPlaced] = useState(false);
 
   useEffect(() => {
@@ -445,11 +445,14 @@ function NativeModelViewerMode({ onBack }) {
     function onArStatus(event) {
       const arStatus = event.detail?.status;
       if (arStatus === "session-started") {
-        setStatus("Scan the surface, then tap to place the dish.");
+        cleanupRef.current?.pause?.();
+        setStatus("Scan the wall, then tap to place the dish.");
       } else if (arStatus === "failed") {
+        cleanupRef.current?.resume?.();
         setStatus("Surface tracking failed. Try a textured spot or use the simulator placement.");
       } else if (arStatus === "not-presenting") {
-        setStatus("Tap anywhere on the floor to place the dish.");
+        cleanupRef.current?.resume?.();
+        setStatus("Tap a surface to place the dish.");
       }
     }
 
@@ -479,7 +482,11 @@ function NativeModelViewerMode({ onBack }) {
       setStatus("AR is still loading. Try again in a moment.");
       return;
     }
-    modelViewerRef.current.activateAR();
+    cleanupRef.current?.pause?.();
+    const activation = modelViewerRef.current.activateAR();
+    if (activation?.catch) {
+      activation.catch(() => cleanupRef.current?.resume?.());
+    }
   }
 
   return (
@@ -497,7 +504,7 @@ function NativeModelViewerMode({ onBack }) {
           alt="Bong Kebab"
           ar
           ar-modes="webxr quick-look"
-          ar-placement="floor"
+          ar-placement="wall"
           ar-scale="fixed"
           scale={scaleAttribute}
           camera-orbit={SIMULATOR_CAMERA_ORBIT}
@@ -675,7 +682,7 @@ function createWebXRShadowSurface() {
 function Desktop3DMode({ onBack }) {
   const canvasRef = useRef(null);
   const cleanupRef = useRef(null);
-  const [status, setStatus] = useState("Tap anywhere on the floor to place the dish.");
+  const [status, setStatus] = useState("Tap a surface to place the dish.");
   const [placed, setPlaced] = useState(false);
 
   useEffect(() => {
@@ -708,8 +715,8 @@ function Desktop3DMode({ onBack }) {
 }
 
 async function initDesktop3D(canvas, setStatus, setPlaced) {
-  const renderer = new THREE.WebGLRenderer({ canvas, antialias: true });
-  renderer.setPixelRatio(Math.min(window.devicePixelRatio || 1, 2));
+  const renderer = new THREE.WebGLRenderer({ canvas, antialias: true, powerPreference: "high-performance" });
+  renderer.setPixelRatio(Math.min(window.devicePixelRatio || 1, 1.5));
   renderer.setSize(window.innerWidth, window.innerHeight, false);
   renderer.outputColorSpace = THREE.SRGBColorSpace;
   renderer.shadowMap.enabled = true;
@@ -739,8 +746,8 @@ async function initDesktop3D(canvas, setStatus, setPlaced) {
   light.shadow.camera.near = 0.5;
   light.shadow.camera.far = 25;
   
-  light.shadow.mapSize.width = 2048; // High-res shadow
-  light.shadow.mapSize.height = 2048;
+  light.shadow.mapSize.width = 1024;
+  light.shadow.mapSize.height = 1024;
   light.shadow.bias = -0.0005;
   light.shadow.radius = 1.5; // Slightly sharper, pronounced shadow edge to match reference
   scene.add(light);
@@ -751,6 +758,7 @@ async function initDesktop3D(canvas, setStatus, setPlaced) {
 
   const model = await loadModel();
   model.position.set(0, 0, -1);
+  model.visible = false;
   scene.add(model);
 
   const raycaster = new THREE.Raycaster();
@@ -769,6 +777,7 @@ async function initDesktop3D(canvas, setStatus, setPlaced) {
     if (intersects.length > 0) {
       model.position.copy(intersects[0].point);
       model.position.y = 0;
+      model.visible = true;
       isPlaced = true;
       setStatus("Dish locked in place. Use trackpad to zoom in/out.");
       setPlaced(true);
@@ -804,13 +813,29 @@ async function initDesktop3D(canvas, setStatus, setPlaced) {
   }
   window.addEventListener('resize', resize);
 
-  renderer.setAnimationLoop(() => {
+  function renderLoop() {
     renderer.render(scene, camera);
-  });
+  }
+
+  let isRendering = false;
+
+  function resume() {
+    if (isRendering) return;
+    isRendering = true;
+    renderer.setAnimationLoop(renderLoop);
+  }
+
+  function pause() {
+    if (!isRendering) return;
+    isRendering = false;
+    renderer.setAnimationLoop(null);
+  }
+
+  resume();
 
   return {
     cleanup: () => {
-      renderer.setAnimationLoop(null);
+      pause();
       window.removeEventListener('pointerdown', onPointerDown);
       window.removeEventListener('wheel', onWheel);
       window.removeEventListener('resize', resize);
@@ -820,8 +845,11 @@ async function initDesktop3D(canvas, setStatus, setPlaced) {
     reset: () => {
       isPlaced = false;
       model.position.set(0, 0, -1);
-      setStatus("Tap anywhere on the floor to place the dish.");
+      model.visible = false;
+      setStatus("Tap a surface to place the dish.");
       setPlaced(false);
-    }
+    },
+    pause,
+    resume,
   };
 }
