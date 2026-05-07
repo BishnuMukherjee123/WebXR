@@ -13,7 +13,8 @@ export default function ThreeARScene() {
     <div className="ar-app">
       {mode === "home" && <HomeScreen onMode={setMode} />}
       {mode === "webxr" && <WebXRSurfaceMode onBack={() => setMode("home")} />}
-      {mode === "native" && <Desktop3DMode onBack={() => setMode("home")} isNativeMode={true} />}
+      {mode === "preview" && <Desktop3DMode onBack={() => setMode("home")} />}
+      {mode === "native" && <NativeModelViewerMode onBack={() => setMode("home")} />}
       {mode === "marker" && <MarkerARMode onBack={() => setMode("home")} />}
     </div>
   );
@@ -24,16 +25,20 @@ function HomeScreen({ onMode }) {
     <div className="ar-home">
       <div className="ar-home__badge">AR</div>
       <h1>Aroma AR</h1>
-      <p>Choose a free AR mode. Surface AR stays in browser on Android Chrome; native AR works wider but opens the phone viewer.</p>
+      <p>Use the simulator to tune scale and shadows, then launch real surface AR on a supported phone.</p>
 
       <div className="ar-mode-list">
         <button className="ar-mode-card is-primary" onClick={() => onMode("webxr")}>
-          <span>Browser Surface AR</span>
-          <small>Free WebXR hit-test. Best on Android Chrome.</small>
+          <span>Real Surface AR</span>
+          <small>WebXR hit-test places the dish on a detected real table or floor.</small>
+        </button>
+        <button className="ar-mode-card" onClick={() => onMode("preview")}>
+          <span>Surface Simulator</span>
+          <small>Fake Three.js floor for adjusting size, lighting, and shadows.</small>
         </button>
         <button className="ar-mode-card" onClick={() => onMode("native")}>
-          <span>Native Surface AR</span>
-          <small>Uses model-viewer. May open Scene Viewer or Quick Look.</small>
+          <span>Model Viewer AR</span>
+          <small>Uses model-viewer surface placement where the platform supports it.</small>
         </button>
         <button className="ar-mode-card" onClick={() => onMode("marker")}>
           <span>Browser Marker AR</span>
@@ -179,7 +184,6 @@ async function initWebXR(canvas, setStatus, modelRef, reticleRef) {
     
     model.position.setFromMatrixPosition(reticle.matrix);
     model.quaternion.setFromRotationMatrix(reticle.matrix);
-    model.position.y += 0.05; // 5cm floating gap
     model.visible = true;
     isPlaced = true;
     reticle.visible = false;
@@ -253,7 +257,55 @@ async function initWebXR(canvas, setStatus, modelRef, reticleRef) {
   };
 }
 
-// Removed the old NativeModelViewerMode since it is now powered completely by Desktop3DMode
+function NativeModelViewerMode({ onBack }) {
+  const [scriptReady, setScriptReady] = useState(Boolean(customElements.get("model-viewer")));
+
+  useEffect(() => {
+    if (customElements.get("model-viewer")) return;
+
+    const script = document.createElement("script");
+    script.type = "module";
+    script.src = "https://unpkg.com/@google/model-viewer/dist/model-viewer.min.js";
+    script.onload = () => setScriptReady(true);
+    script.onerror = () => console.error("[model-viewer] Could not load model-viewer script");
+    document.head.appendChild(script);
+  }, []);
+
+  return (
+    <div className="native-viewer">
+      <div className="ar-topbar">
+        <button onClick={onBack}>Back</button>
+        <div>Model Viewer AR</div>
+      </div>
+
+      {scriptReady ? (
+        <model-viewer
+          src={MODEL_URL}
+          alt="Bong Kebab"
+          ar
+          ar-modes="webxr scene-viewer quick-look"
+          ar-placement="floor"
+          ar-scale="auto"
+          camera-controls
+          auto-rotate
+          shadow-intensity="1"
+          exposure="1"
+          className="native-viewer__model"
+        >
+          <button slot="ar-button" className="native-viewer__ar-button">
+            View on Real Surface
+          </button>
+        </model-viewer>
+      ) : (
+        <div className="native-viewer__loading">Loading model-viewer...</div>
+      )}
+
+      <div className="native-viewer__note">
+        Android may open Scene Viewer. iPhone needs a USDZ file for full Quick Look AR.
+      </div>
+    </div>
+  );
+}
 
 function MarkerARMode({ onBack }) {
   return (
@@ -316,24 +368,11 @@ function disposeWorld(scene) {
   });
 }
 
-function Desktop3DMode({ onBack, isNativeMode }) {
+function Desktop3DMode({ onBack }) {
   const canvasRef = useRef(null);
   const cleanupRef = useRef(null);
   const [status, setStatus] = useState("Tap anywhere on the floor to place the dish.");
   const [placed, setPlaced] = useState(false);
-  
-  const [scriptReady, setScriptReady] = useState(Boolean(customElements.get("model-viewer")));
-  const modelViewerRef = useRef(null);
-
-  useEffect(() => {
-    if (isNativeMode && !customElements.get("model-viewer")) {
-      const script = document.createElement("script");
-      script.type = "module";
-      script.src = "https://unpkg.com/@google/model-viewer/dist/model-viewer.min.js";
-      script.onload = () => setScriptReady(true);
-      document.head.appendChild(script);
-    }
-  }, [isNativeMode]);
 
   useEffect(() => {
     let active = true;
@@ -357,29 +396,8 @@ function Desktop3DMode({ onBack, isNativeMode }) {
         <div>{status}</div>
       </div>
       
-      {isNativeMode && scriptReady && (
-        <model-viewer
-          ref={modelViewerRef}
-          src={MODEL_URL}
-          ar
-          ar-modes="webxr scene-viewer quick-look"
-          ar-scale="fixed"
-          style={{ position: 'absolute', width: 0, height: 0, opacity: 0, pointerEvents: 'none' }}
-        ></model-viewer>
-      )}
-
       <div className="ar-actions" style={{ flexDirection: 'column', gap: '12px', alignItems: 'center' }}>
         {placed && <button onClick={() => cleanupRef.current?.reset()}>Reset Position</button>}
-        
-        {isNativeMode && scriptReady && (
-          <button 
-            className="is-primary" 
-            style={{ backgroundColor: '#fff', color: '#111' }}
-            onClick={() => modelViewerRef.current?.activateAR()}
-          >
-            Launch Native AR Viewer
-          </button>
-        )}
       </div>
     </div>
   );
@@ -440,7 +458,7 @@ async function initDesktop3D(canvas, setStatus, setPlaced) {
   scene.add(grid);
 
   const model = await loadModel();
-  model.position.set(0, 0.05, -1); // 5cm floating
+  model.position.set(0, 0, -1);
   scene.add(model);
 
   const raycaster = new THREE.Raycaster();
@@ -458,7 +476,7 @@ async function initDesktop3D(canvas, setStatus, setPlaced) {
     const intersects = raycaster.intersectObject(floor);
     if (intersects.length > 0) {
       model.position.copy(intersects[0].point);
-      model.position.y += 0.05; // hover 5cm above surface
+      model.position.y = 0;
       isPlaced = true;
       setStatus("Dish locked in place. Use trackpad to zoom in/out.");
       setPlaced(true);
@@ -509,7 +527,7 @@ async function initDesktop3D(canvas, setStatus, setPlaced) {
     },
     reset: () => {
       isPlaced = false;
-      model.position.set(0, 0.05, -1);
+      model.position.set(0, 0, -1);
       setStatus("Tap anywhere on the floor to place the dish.");
       setPlaced(false);
     }
