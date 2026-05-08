@@ -8,12 +8,12 @@ import { PlacementBox } from "./PlacementBox";
 import { Damper } from "./Damper";
 
 const MODELS = [
-  { name: 'Bong Kebab', glb: '/models/10.glb', webp: 'https://via.placeholder.com/100?text=Bong+Kebab' },
-  { name: 'Chair', glb: '../../assets/ShopifyModels/Chair.glb', webp: '../../assets/ShopifyModels/Chair.webp' },
-  { name: 'Mixer', glb: '../../assets/ShopifyModels/Mixer.glb', webp: '../../assets/ShopifyModels/Mixer.webp' },
-  { name: 'GeoPlanter', glb: '../../assets/ShopifyModels/GeoPlanter.glb', webp: '../../assets/ShopifyModels/GeoPlanter.webp' },
-  { name: 'ToyTrain', glb: '../../assets/ShopifyModels/ToyTrain.glb', webp: '../../assets/ShopifyModels/ToyTrain.webp' },
-  { name: 'Canoe', glb: '../../assets/ShopifyModels/Canoe.glb', webp: '../../assets/ShopifyModels/Canoe.webp' }
+  { name: 'Bong Kebab', glb: '/models/10.glb', webp: '' },
+  { name: 'Chair', glb: '../../assets/ShopifyModels/Chair.glb', webp: '' },
+  { name: 'Mixer', glb: '../../assets/ShopifyModels/Mixer.glb', webp: '' },
+  { name: 'GeoPlanter', glb: '../../assets/ShopifyModels/GeoPlanter.glb', webp: '' },
+  { name: 'ToyTrain', glb: '../../assets/ShopifyModels/ToyTrain.glb', webp: '' },
+  { name: 'Canoe', glb: '../../assets/ShopifyModels/Canoe.glb', webp: '' }
 ];
 
 const MODEL_SCALE = 0.8;
@@ -58,9 +58,13 @@ export default function ThreeARScene() {
     async function initDesktop() {
       if (!canvasRef.current) return;
       cleanupRef.current?.cleanup?.();
-      const handles = await initDesktopView(canvasRef.current, currentModel.glb);
-      if (active) cleanupRef.current = handles;
-      else handles.cleanup();
+      try {
+        const handles = await initDesktopView(canvasRef.current, currentModel.glb);
+        if (active) cleanupRef.current = handles;
+        else handles.cleanup();
+      } catch (err) {
+        console.error("Desktop view failed to load", err);
+      }
     }
     initDesktop();
     return () => {
@@ -87,18 +91,17 @@ export default function ThreeARScene() {
   }
 
   return (
-    <div className="marker-ar-root">
-      <canvas ref={canvasRef} className="ar-stage__canvas" />
+    <div className="marker-ar-root" style={{ width: '100vw', height: '100dvh', position: 'fixed', inset: 0, overflow: 'hidden' }}>
+      <canvas ref={canvasRef} className="ar-stage__canvas" style={{ width: '100%', height: '100%', display: 'block' }} />
       
       {!starting && (
-        <div className="ar-stage__prestart" style={{ pointerEvents: 'none' }}>
-          <div className="ar-stage__prestart-badge">Surface AR</div>
-          <h2>Ready to scan</h2>
-          <p>Tap Start to open the real AR camera.</p>
+        <div className="ar-stage__prestart" style={{ position: 'absolute', top: '15%', left: 0, right: 0, textAlign: 'center', pointerEvents: 'none', zIndex: 5 }}>
+          <div className="ar-stage__prestart-badge" style={{ display: 'inline-block', padding: '4px 8px', background: '#333', color: '#fff', borderRadius: '4px' }}>Surface AR</div>
+          <h2 style={{ color: '#111', marginTop: '16px' }}>Ready to scan</h2>
         </div>
       )}
 
-      <div ref={overlayRef} className="xr-overlay">
+      <div ref={overlayRef} className="xr-overlay" style={{ position: 'absolute', inset: 0, pointerEvents: 'none', zIndex: 10 }}>
         <div className="ar-topbar" style={{ display: 'grid', gridTemplateColumns: '1fr', zIndex: 12 }}>
           <div style={{ textAlign: 'center', pointerEvents: 'auto' }}>{status}</div>
         </div>
@@ -110,19 +113,20 @@ export default function ThreeARScene() {
           </div>
         )}
 
-        <div className="ar-actions">
-          {!starting && (
-            <button id="ar-button" onClick={startWebXR} disabled={!supported} style={{ position: 'relative', left: 'auto', transform: 'none', bottom: 'auto' }}>
-              Start Surface AR
-            </button>
-          )}
-          {starting && placed && (
-            <button onClick={() => cleanupRef.current?.reset?.()}>Reset Placement</button>
-          )}
-        </div>
+        {!starting && (
+          <button id="ar-button" onClick={startWebXR} disabled={!supported} style={{ pointerEvents: 'auto' }}>
+            Start Surface AR
+          </button>
+        )}
+        
+        {starting && placed && (
+          <button onClick={() => cleanupRef.current?.reset?.()} style={{ position: 'absolute', top: '70px', left: '50%', transform: 'translateX(-50%)', padding: '8px 16px', pointerEvents: 'auto', borderRadius: '20px', border: 'none', background: '#fff', color: '#111', fontWeight: 'bold' }}>
+            Reset Placement
+          </button>
+        )}
 
         {/* Carousel UI */}
-        <div className="slider" onPointerDown={(e) => e.stopPropagation()}>
+        <div className="slider" onPointerDown={(e) => e.stopPropagation()} style={{ pointerEvents: 'auto' }}>
           <div className="slides">
             {MODELS.map((model) => (
               <button
@@ -132,8 +136,20 @@ export default function ThreeARScene() {
                   e.stopPropagation();
                   setCurrentModel(model);
                 }}
-                style={{ backgroundImage: `url('${model.webp}')` }}
-              />
+                style={{
+                  backgroundImage: model.webp ? `url('${model.webp}')` : 'none',
+                  display: 'flex',
+                  alignItems: 'center',
+                  justifyContent: 'center',
+                  fontSize: '12px',
+                  fontWeight: 'bold',
+                  color: '#111',
+                  backgroundColor: '#fff',
+                  border: currentModel.name === model.name ? '2px solid #4285f4' : '1px solid #ccc'
+                }}
+              >
+                {!model.webp && model.name}
+              </button>
             ))}
           </div>
         </div>
@@ -149,16 +165,15 @@ async function initDesktopView(canvas, modelUrl) {
   const renderer = new THREE.WebGLRenderer({ canvas, alpha: true, antialias: true, powerPreference: "high-performance" });
   renderer.toneMapping = THREE.NeutralToneMapping;
   renderer.toneMappingExposure = 1.3;
-  renderer.setPixelRatio(window.devicePixelRatio);
+  renderer.setPixelRatio(Math.min(window.devicePixelRatio, 2));
   renderer.setSize(window.innerWidth, window.innerHeight, false);
   renderer.outputColorSpace = THREE.SRGBColorSpace;
   renderer.shadowMap.enabled = true;
   renderer.shadowMap.type = THREE.PCFSoftShadowMap;
 
   const scene = new THREE.Scene();
-  scene.background = new THREE.Color('#eee'); // Matches the docs example bg color
+  scene.background = new THREE.Color('#eee');
 
-  // TextureUtils.ts: Generates PMREM neutral lighting environment
   const pmremGenerator = new THREE.PMREMGenerator(renderer);
   pmremGenerator.compileEquirectangularShader();
   scene.environment = pmremGenerator.fromScene(new RoomEnvironment()).texture;
@@ -166,18 +181,16 @@ async function initDesktopView(canvas, modelUrl) {
   const camera = new THREE.PerspectiveCamera(45, window.innerWidth / window.innerHeight, 0.1, 100);
   camera.position.set(0, 1.5, 3.5);
 
-  // SmoothControls.ts: Orbital damping and limits
   const controls = new OrbitControls(camera, canvas);
   controls.enableDamping = true;
   controls.dampingFactor = 0.05;
-  controls.minDistance = 1;
+  controls.minDistance = 0.5;
   controls.maxDistance = 10;
   controls.target.set(0, 0.25, 0);
 
   const model = await loadModel(modelUrl);
   scene.add(model);
 
-  // Shadow.ts: Exact shadow fading below the object
   const shadowSurface = new THREE.Group();
   const shadowGeo = new THREE.PlaneGeometry(10, 10);
   const shadowMat = new THREE.ShadowMaterial({ color: 0x000000, opacity: 0.8, transparent: true, depthWrite: false });
@@ -236,7 +249,6 @@ async function initWebXR(canvas, overlayRoot, setStatus, setPlaced, modelUrl) {
   const scene = new THREE.Scene();
   scene.background = null;
 
-  // TextureUtils.ts: AR Neutral PMREM Environment
   const pmremGenerator = new THREE.PMREMGenerator(renderer);
   pmremGenerator.compileEquirectangularShader();
   scene.environment = pmremGenerator.fromScene(new RoomEnvironment()).texture;
@@ -256,7 +268,6 @@ async function initWebXR(canvas, overlayRoot, setStatus, setPlaced, modelUrl) {
   model.visible = false;
   scene.add(model);
 
-  // Shadow.ts Logic
   const shadowSurface = new THREE.Group();
   const shadowGeo = new THREE.PlaneGeometry(10, 10);
   const shadowMat = new THREE.ShadowMaterial({ color: 0x000000, opacity: 0.8, transparent: true, depthWrite: false });
@@ -267,7 +278,6 @@ async function initWebXR(canvas, overlayRoot, setStatus, setPlaced, modelUrl) {
   shadowSurface.visible = false;
   scene.add(shadowSurface);
 
-  // PlacementBox.ts Logic
   const box = new THREE.Box3().setFromObject(model);
   const placementBox = new PlacementBox(box);
   placementBox.visible = false;
@@ -486,21 +496,17 @@ function preloadModel(modelUrl) {
   return loadedModelsCache[modelUrl];
 }
 
-// ModelScene.ts exact behavior
 async function loadModel(modelUrl) {
   const asset = await preloadModel(modelUrl);
-  const model = asset.scene.clone(true);
+  
+  // NOTE: Simply use a lightweight clone to avoid breaking Draco geometries!
+  const model = asset.scene.clone(); 
   
   model.traverse((child) => {
-    if (!child.isMesh) return;
-    if (child.geometry) child.geometry = child.geometry.clone();
-    if (Array.isArray(child.material)) {
-      child.material = child.material.map((m) => m.clone());
-    } else if (child.material) {
-      child.material = child.material.clone();
+    if (child.isMesh) {
+      child.castShadow = true;
+      child.receiveShadow = true;
     }
-    child.castShadow = true;
-    child.receiveShadow = true;
   });
 
   const box = new THREE.Box3().setFromObject(model);
