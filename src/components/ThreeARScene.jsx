@@ -2,6 +2,7 @@ import React, { useEffect, useRef, useState } from "react";
 import "@google/model-viewer";
 
 const MODELS = [
+  { name: 'Astronaut (Test)', glb: 'https://modelviewer.dev/shared-assets/models/Astronaut.glb', webp: '' },
   { name: 'Bong Kebab', glb: '/models/10.glb', webp: '' },
   { name: 'Chair', glb: '../../assets/ShopifyModels/Chair.glb', webp: '../../assets/ShopifyModels/Chair.webp' },
   { name: 'Mixer', glb: '../../assets/ShopifyModels/Mixer.glb', webp: '../../assets/ShopifyModels/Mixer.webp' },
@@ -71,6 +72,7 @@ export default function ThreeARScene() {
         poster={currentModel.webp ? currentModel.webp : undefined}
         alt="A 3D model in AR"
         loading="eager"
+        bounds="tight"
         ar="true"
         ar-modes="webxr scene-viewer quick-look"
         ar-placement={placementMode}
@@ -156,7 +158,9 @@ export default function ThreeARScene() {
                   justifyContent: 'center',
                   fontSize: '12px',
                   fontWeight: 'bold',
-                  boxShadow: '0 2px 6px rgba(0,0,0,0.1)'
+                  boxShadow: '0 2px 6px rgba(0,0,0,0.1)',
+                  textAlign: 'center',
+                  padding: '4px'
                 }}
               >
                 {!model.webp && model.name}
