@@ -17,8 +17,11 @@ export default function ThreeARScene() {
   const [arStatus, setArStatus] = useState("Tap 'Start Surface AR' to open camera.");
   const [placementMode, setPlacementMode] = useState("floor");
 
-  // Handle custom events on the Web Component
   useEffect(() => {
+    // Force model-viewer to use the local draco decoders just in case the CDN is blocked
+    window.ModelViewerElement = window.ModelViewerElement || {};
+    window.ModelViewerElement.dracoDecoderLocation = '/draco/gltf/';
+
     const viewer = modelViewerRef.current;
     if (!viewer) return;
 
@@ -42,7 +45,6 @@ export default function ThreeARScene() {
     };
   }, []);
 
-  // Intercept beforexrselect on the slider to prevent placing/moving the model when interacting with the UI
   useEffect(() => {
     const slider = sliderRef.current;
     if (!slider) return;
@@ -59,29 +61,29 @@ export default function ThreeARScene() {
   }, []);
 
   return (
-    <div className="marker-ar-root" style={{ width: '100vw', height: '100dvh', position: 'relative', background: '#eee', overflow: 'hidden' }}>
-      {/* Topbar for status updates */}
+    <div className="marker-ar-root" style={{ width: '100vw', height: '100dvh', position: 'relative', overflow: 'hidden' }}>
+      
       <div className="ar-topbar" style={{ position: 'absolute', top: '16px', left: '16px', right: '16px', zIndex: 12, textAlign: 'center', pointerEvents: 'none' }}>
         <div style={{ display: 'inline-block', padding: '8px 16px', background: 'rgba(0,0,0,0.7)', color: '#fff', borderRadius: '20px', fontSize: '14px', fontWeight: 'bold', backdropFilter: 'blur(10px)' }}>
           {arStatus}
         </div>
       </div>
 
-      {/* Model Viewer Custom Element */}
       <model-viewer
         ref={modelViewerRef}
         src={currentModel.glb}
-        poster={currentModel.webp}
+        poster={currentModel.webp ? currentModel.webp : undefined}
         alt="A 3D model in AR"
-        ar
+        ar="true"
         ar-modes="webxr scene-viewer quick-look"
         ar-placement={placementMode}
-        camera-controls
+        camera-controls="true"
+        auto-rotate="true"
         touch-action="none"
         shadow-intensity="1"
-        style={{ width: '100%', height: '100%', display: 'block' }}
+        environment-image="neutral"
+        style={{ width: '100%', height: '100%', display: 'block', backgroundColor: '#eee' }}
       >
-        {/* Custom AR Launch Button (matches project design system) */}
         <button slot="ar-button" id="ar-button" style={{
           position: 'absolute',
           bottom: '132px',
@@ -99,17 +101,14 @@ export default function ThreeARScene() {
           View in your space
         </button>
 
-        {/* AR Tracking Prompt */}
         <div id="ar-prompt" style={{ display: 'none' }}>
           <img src="../../assets/hand.png" alt="Hand prompt" />
         </div>
 
-        {/* AR Tracking Failure */}
         <button id="ar-failure" style={{ display: 'none' }}>
           AR is not tracking!
         </button>
 
-        {/* Wall Placement Toggle - Optional UI based on instruction goal */}
         <div style={{ position: 'absolute', top: '70px', right: '16px', pointerEvents: 'auto' }}>
           <button 
             onClick={() => setPlacementMode(prev => prev === 'floor' ? 'wall' : 'floor')}
@@ -119,7 +118,6 @@ export default function ThreeARScene() {
           </button>
         </div>
 
-        {/* Carousel UI */}
         <div className="slider" ref={sliderRef} style={{
           position: 'absolute',
           bottom: '16px',
