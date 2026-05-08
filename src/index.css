@@ -17,156 +17,16 @@ button {
   font: inherit;
 }
 
-.ar-app,
-.ar-home,
-.ar-stage,
-.native-viewer,
-.marker-mode {
+/* ThreeARScene root container \u2014 full screen, dark bg */
+.marker-ar-root {
   position: fixed;
   inset: 0;
-  overflow: hidden;
   background: #050505;
   color: #fff;
+  overflow: hidden;
 }
 
-.ar-home {
-  display: flex;
-  flex-direction: column;
-  align-items: center;
-  justify-content: center;
-  padding: 24px;
-  text-align: center;
-  background:
-    radial-gradient(circle at 50% 0%, rgba(255, 255, 255, 0.1), transparent 34%),
-    linear-gradient(140deg, #0b0e10 0%, #181818 54%, #220f11 100%);
-}
-
-.ar-home__badge {
-  display: grid;
-  width: 72px;
-  height: 72px;
-  margin-bottom: 22px;
-  place-items: center;
-  border: 1px solid rgba(255, 255, 255, 0.18);
-  border-radius: 50%;
-  background: rgba(255, 255, 255, 0.08);
-  font-size: 28px;
-  font-weight: 850;
-}
-
-.ar-home h1 {
-  margin: 0 0 10px;
-  font-size: 30px;
-  line-height: 1.1;
-}
-
-.ar-home p {
-  max-width: 380px;
-  margin: 0 0 26px;
-  color: rgba(255, 255, 255, 0.72);
-  font-size: 15px;
-  line-height: 1.55;
-}
-
-.ar-mode-list {
-  display: grid;
-  width: min(420px, 100%);
-  gap: 10px;
-}
-
-.ar-mode-card {
-  display: grid;
-  gap: 5px;
-  width: 100%;
-  padding: 15px 16px;
-  border: 1px solid rgba(255, 255, 255, 0.16);
-  border-radius: 8px;
-  color: #fff;
-  background: rgba(255, 255, 255, 0.08);
-  cursor: pointer;
-  text-align: left;
-}
-
-.ar-mode-card.is-primary {
-  color: #111;
-  background: #fff;
-}
-
-.ar-mode-card span {
-  font-size: 15px;
-  font-weight: 850;
-}
-
-.ar-mode-card small {
-  color: currentColor;
-  font-size: 12px;
-  line-height: 1.35;
-  opacity: 0.72;
-}
-
-.ar-stage__canvas {
-  position: fixed;
-  inset: 0;
-  width: 100vw;
-  height: 100vh;
-  background: transparent;
-  touch-action: none;
-  pointer-events: auto;
-}
-
-.ar-stage {
-  background: transparent;
-}
-
-.xr-overlay {
-  position: fixed;
-  inset: 0;
-  z-index: 12;
-  background: transparent;
-  pointer-events: none;
-}
-
-.ar-stage__prestart {
-  position: fixed;
-  inset: 0;
-  z-index: 2;
-  display: flex;
-  flex-direction: column;
-  align-items: center;
-  justify-content: center;
-  padding: 28px;
-  text-align: center;
-  background:
-    radial-gradient(circle at 50% 24%, rgba(255, 255, 255, 0.16), transparent 28%),
-    linear-gradient(150deg, #0b0f12 0%, #101010 58%, #241112 100%);
-}
-
-.ar-stage__prestart-badge {
-  display: grid;
-  width: 74px;
-  height: 74px;
-  margin-bottom: 22px;
-  place-items: center;
-  border: 1px solid rgba(255, 255, 255, 0.18);
-  border-radius: 50%;
-  background: rgba(255, 255, 255, 0.08);
-  font-size: 13px;
-  font-weight: 850;
-}
-
-.ar-stage__prestart h2 {
-  margin: 0 0 10px;
-  font-size: 26px;
-}
-
-.ar-stage__prestart p {
-  max-width: 340px;
-  margin: 0;
-  color: rgba(255, 255, 255, 0.68);
-  font-size: 14px;
-  line-height: 1.55;
-}
-
+/* Status topbar */
 .ar-topbar {
   position: fixed;
   top: max(14px, env(safe-area-inset-top));
@@ -174,31 +34,13 @@ button {
   left: 12px;
   z-index: 12;
   display: grid;
-  grid-template-columns: auto 1fr;
-  gap: 10px;
-  align-items: center;
+  place-items: center;
   pointer-events: none;
-}
-
-.ar-topbar button,
-.ar-actions button {
-  border: 0;
-  border-radius: 999px;
-  cursor: pointer;
-  font-size: 14px;
-  font-weight: 850;
-}
-
-.ar-topbar button {
-  padding: 9px 14px;
-  color: #111;
-  background: #fff;
-  pointer-events: auto;
 }
 
 .ar-topbar div {
   min-width: 0;
-  padding: 9px 14px;
+  padding: 9px 18px;
   overflow: hidden;
   border-radius: 999px;
   color: #fff;
@@ -211,52 +53,6 @@ button {
   backdrop-filter: blur(10px);
 }
 
-.ar-actions {
-  position: fixed;
-  right: 0;
-  bottom: max(26px, env(safe-area-inset-bottom));
-  left: 0;
-  z-index: 12;
-  display: flex;
-  flex-wrap: wrap;
-  gap: 10px;
-  justify-content: center;
-  padding: 0 14px;
-  pointer-events: none;
-}
-
-.ar-actions button {
-  min-width: 160px;
-  max-width: calc(100vw - 28px);
-  padding: 14px 24px;
-  color: #111;
-  background: #fff;
-  pointer-events: auto;
-}
-
-.ar-actions button:disabled {
-  cursor: not-allowed;
-  opacity: 0.55;
-}
-
-.native-viewer--simulator {
-  background: #1a1a24;
-}
-
-.native-viewer__ar-host {
-  position: fixed;
-  left: -120px;
-  bottom: -120px;
-  width: 1px;
-  height: 1px;
-  opacity: 0;
-  pointer-events: none;
-}
-
-.native-viewer__hidden-ar-button {
-  display: none;
-}
-
 .native-viewer__loading {
   position: fixed;
   inset: 0;
@@ -266,41 +62,6 @@ button {
   padding: 18px;
   color: rgba(255, 255, 255, 0.72);
   text-align: center;
-}
-
-.ar-actions--stack {
-  flex-direction: column;
-  gap: 12px;
-  align-items: center;
-}
-
-.marker-mode iframe {
-  width: 100%;
-  height: 100%;
-  border: 0;
-}
-
-.marker-mode__marker {
-  position: fixed;
-  right: 16px;
-  bottom: max(24px, env(safe-area-inset-bottom));
-  z-index: 14;
-  padding: 12px 18px;
-  border-radius: 999px;
-  color: #111;
-  background: #fff;
-  font-size: 14px;
-  font-weight: 850;
-  text-decoration: none;
-}
-
-/* MarkerARMode root container \u2014 full screen, dark bg */
-.marker-ar-root {
-  position: fixed;
-  inset: 0;
-  background: #050505;
-  color: #fff;
-  overflow: hidden;
 }
 
 /* model-viewer host \u2014 the real sizing comes from the inline style
