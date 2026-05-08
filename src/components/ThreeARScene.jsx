@@ -648,7 +648,7 @@ function MarkerARMode({ onBack }) {
       </div>
 
       {scriptReady ? (
-        <model-viewer src="../../assets/boom_2_.glb" ar ar-placement="wall" camera-controls touch-action="pan-y" alt="A 3D model of some wall art"></model-viewer>
+        <model-viewer src={MODEL_URL} ref={modelViewerRef} ar ar-placement="wall" camera-controls touch-action="pan-y" alt="A 3D model of some wall art"></model-viewer>
       ) : (
         <div className="native-viewer__loading">Loading model-viewer…</div>
       )}
