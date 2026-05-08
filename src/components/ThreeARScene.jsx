@@ -649,13 +649,11 @@ function MarkerARMode({ onBack }) {
 
       {scriptReady ? (
         <model-viewer
+          ar camera-controls
           ref={modelViewerRef}
           src={MODEL_URL}
           alt="A 3D model of some wall art"
-          ar
           ar-modes="webxr scene-viewer quick-look"
-          ar-placement="wall"
-          camera-controls
           touch-action="pan-y"
           // shadow-intensity="1"
           // shadow-softness="0.5"
