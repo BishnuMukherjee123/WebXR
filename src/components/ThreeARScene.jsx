@@ -18,10 +18,6 @@ export default function ThreeARScene() {
   const [placementMode, setPlacementMode] = useState("floor");
 
   useEffect(() => {
-    // Force model-viewer to use the local draco decoders just in case the CDN is blocked
-    window.ModelViewerElement = window.ModelViewerElement || {};
-    window.ModelViewerElement.dracoDecoderLocation = '/draco/gltf/';
-
     const viewer = modelViewerRef.current;
     if (!viewer) return;
 
@@ -74,6 +70,7 @@ export default function ThreeARScene() {
         src={currentModel.glb}
         poster={currentModel.webp ? currentModel.webp : undefined}
         alt="A 3D model in AR"
+        loading="eager"
         ar="true"
         ar-modes="webxr scene-viewer quick-look"
         ar-placement={placementMode}
