@@ -294,13 +294,16 @@ button {
   text-decoration: none;
 }
 
-/* MarkerARMode - model-viewer fills the viewport so it can render
-   the 3D preview and open the device camera for AR */
+/* MarkerARMode - model-viewer must be display:block and fill the
+   entire viewport. Custom elements default to inline-block so we
+   must be explicit; position:fixed + inset:0 alone is not enough. */
 .marker-viewer__host {
+  display: block;          /* custom elements default to inline-block */
   position: fixed;
   inset: 0;
-  width: 100%;
-  height: 100%;
+  width: 100vw;
+  height: 100dvh;          /* dvh shrinks with mobile browser chrome */
+  z-index: 1;              /* above the dark container, below the topbar */
   background: transparent;
   --poster-color: transparent;
 }

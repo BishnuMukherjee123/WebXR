@@ -648,7 +648,24 @@ function MarkerARMode({ onBack }) {
       </div>
 
       {scriptReady ? (
-        <model-viewer src={MODEL_URL} ref={modelViewerRef} ar ar-placement="wall" camera-controls touch-action="pan-y" alt="A 3D model of some wall art"></model-viewer>
+        <model-viewer
+          ref={modelViewerRef}
+          src={MODEL_URL}
+          alt="A 3D model of some wall art"
+          ar
+          ar-modes="webxr scene-viewer quick-look"
+          ar-placement="floor"
+          camera-controls
+          touch-action="pan-y"
+          shadow-intensity="1"
+          shadow-softness="0.5"
+          exposure="1.2"
+          className="marker-viewer__host"
+        >
+          <button slot="ar-button" className="marker-viewer__ar-btn">
+            📷 Open AR
+          </button>
+        </model-viewer>
       ) : (
         <div className="native-viewer__loading">Loading model-viewer…</div>
       )}
