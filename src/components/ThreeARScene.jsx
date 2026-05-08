@@ -1,5 +1,4 @@
 import React, { useEffect, useRef, useState } from "react";
-import "@google/model-viewer";
 
 const MODELS = [
   { name: 'Astronaut (Test)', glb: 'https://modelviewer.dev/shared-assets/models/Astronaut.glb', webp: '' },
@@ -77,11 +76,15 @@ export default function ThreeARScene() {
         ar-modes="webxr scene-viewer quick-look"
         ar-placement={placementMode}
         camera-controls="true"
+        camera-target="auto auto auto"
+        camera-orbit="0deg 45deg auto"
         auto-rotate="true"
         touch-action="none"
-        shadow-intensity="1"
+        shadow-intensity="0"
+        exposure="1.2"
+        scale="5 5 5"
         environment-image="neutral"
-        style={{ width: '100%', height: '100%', display: 'block', backgroundColor: '#eee' }}
+        style={{ width: '100%', height: '100%', display: 'block', backgroundColor: '#111' }}
       >
         <button slot="ar-button" id="ar-button" style={{
           position: 'absolute',
