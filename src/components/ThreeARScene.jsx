@@ -640,9 +640,9 @@ function MarkerARMode({ onBack }) {
   }, [scriptReady]);
 
   return (
-    <div className="native-viewer native-viewer--simulator">
-      {/* Top bar */}
-      <div className="ar-topbar" style={{ zIndex: 10 }}>
+    <div className="marker-ar-root">
+      {/* Status topbar — floats above model-viewer */}
+      <div className="ar-topbar" style={{ zIndex: 20 }}>
         <button onClick={onBack}>Back</button>
         <div>{status}</div>
       </div>
@@ -651,16 +651,32 @@ function MarkerARMode({ onBack }) {
         <model-viewer
           ref={modelViewerRef}
           src={MODEL_URL}
-          alt="A 3D model of some wall art"
+          alt="Dish in AR"
           ar
           ar-modes="webxr scene-viewer quick-look"
           ar-placement="floor"
           camera-controls
           touch-action="pan-y"
-          shadow-intensity="1"
+          shadow-intensity="0.8"
           shadow-softness="0.5"
-          exposure="1.2"
+          exposure="1.0"
+          environment-image="neutral"
+          interaction-prompt="none"
           className="marker-viewer__host"
+          style={{
+            /* Override shadow DOM :host defaults:
+               contain:strict clips internal canvas to 300×150px.
+               These inline styles are the only way to override :host rules. */
+            display: 'block',
+            contain: 'none',
+            position: 'fixed',
+            inset: 0,
+            width: '100vw',
+            height: '100dvh',
+            zIndex: 1,
+            background: 'transparent',
+            '--poster-color': 'transparent',
+          }}
         >
           <button slot="ar-button" className="marker-viewer__ar-btn">
             📷 Open AR
