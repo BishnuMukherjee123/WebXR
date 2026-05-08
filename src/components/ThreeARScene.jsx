@@ -885,7 +885,6 @@ async function initDesktop3D(canvas, setStatus, setPlaced) {
   let isPlaced = false;
 
   function onPointerDown(event) {
-    if (event.target !== canvas) return; // ignore clicks on buttons
     if (isPlaced) return; // lock position after first placement
 
     mouse.x = (event.clientX / window.innerWidth) * 2 - 1;
@@ -921,8 +920,12 @@ async function initDesktop3D(canvas, setStatus, setPlaced) {
     if (model.scale.x < minS) model.scale.setScalar(minS);
   }
 
-  window.addEventListener('pointerdown', onPointerDown);
-  window.addEventListener('wheel', onWheel, { passive: false });
+  // Attach to canvas so only taps on the 3-D viewport trigger placement.
+  // Using canvas directly avoids the transparent-canvas hit-test issue where
+  // the browser resolves event.target to the parent container instead of
+  // the canvas, causing an event.target guard to bail out incorrectly.
+  canvas.addEventListener('pointerdown', onPointerDown);
+  canvas.addEventListener('wheel', onWheel, { passive: false });
 
   function resize() {
     camera.aspect = window.innerWidth / window.innerHeight;
@@ -954,8 +957,8 @@ async function initDesktop3D(canvas, setStatus, setPlaced) {
   return {
     cleanup: () => {
       pause();
-      window.removeEventListener('pointerdown', onPointerDown);
-      window.removeEventListener('wheel', onWheel);
+      canvas.removeEventListener('pointerdown', onPointerDown);
+      canvas.removeEventListener('wheel', onWheel);
       window.removeEventListener('resize', resize);
       disposeWorld(scene);
       renderer.dispose();

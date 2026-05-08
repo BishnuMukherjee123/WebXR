@@ -111,6 +111,7 @@ button {
   height: 100vh;
   background: transparent;
   touch-action: none;
+  pointer-events: auto;
 }
 
 .ar-stage {
