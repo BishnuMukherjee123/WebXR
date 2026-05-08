@@ -657,9 +657,9 @@ function MarkerARMode({ onBack }) {
           ar-placement="wall"
           camera-controls
           touch-action="pan-y"
-          shadow-intensity="1"
-          shadow-softness="0.5"
-          exposure="1.2"
+          // shadow-intensity="1"
+          // shadow-softness="0.5"
+          // exposure="1.2"
           className="marker-viewer__host"
         >
           <button slot="ar-button" className="marker-viewer__ar-btn">
