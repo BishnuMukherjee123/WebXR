@@ -6,6 +6,12 @@ import mkcert from 'vite-plugin-mkcert'
 // Vercel deploys with HTTPS automatically, no SSL plugin needed
 export default defineConfig({
   plugins: [react(), mkcert()],
+  resolve: {
+    // Ensure only one copy of Three.js is bundled — prevents "Multiple instances
+    // of Three.js being imported" warning when model-viewer CDN script runs
+    // alongside the app's own three import.
+    dedupe: ['three'],
+  },
   server: {
     host: '0.0.0.0',
     port: 5173,
@@ -27,3 +33,4 @@ export default defineConfig({
     }
   }
 })
+

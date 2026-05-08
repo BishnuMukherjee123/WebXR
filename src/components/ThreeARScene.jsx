@@ -599,8 +599,12 @@ function MarkerARMode({ onBack }) {
   const [status, setStatus] = useState("Tap 'Open AR' to place the model on a wall.");
   const [arActive, setArActive] = useState(false);
 
-  // Inject model-viewer script once
+  // Inject model-viewer script once.
+  // Pin window.THREE to the app's Three.js instance BEFORE the script loads so
+  // model-viewer reuses it instead of creating a second copy — this eliminates
+  // the "Multiple instances of Three.js being imported" console warning.
   useEffect(() => {
+    if (!window.THREE) window.THREE = THREE;
     if (customElements.get("model-viewer")) return;
     const script = document.createElement("script");
     script.type = "module";
@@ -649,17 +653,17 @@ function MarkerARMode({ onBack }) {
           src={MODEL_URL}
           alt="A 3D model of some wall art"
           ar
-          ar-modes="webxr quick-look"
+          ar-modes="webxr scene-viewer quick-look"
           ar-placement="wall"
           camera-controls
           touch-action="pan-y"
           shadow-intensity="1"
           shadow-softness="0.5"
           exposure="1.2"
-          className="native-viewer__ar-host"
+          className="marker-viewer__host"
         >
-          <button slot="ar-button" className="native-viewer__hidden-ar-button">
-            Open AR
+          <button slot="ar-button" className="marker-viewer__ar-btn">
+            📷 Open AR
           </button>
         </model-viewer>
       ) : (

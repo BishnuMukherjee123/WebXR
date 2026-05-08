@@ -292,3 +292,32 @@ button {
   font-weight: 850;
   text-decoration: none;
 }
+
+/* MarkerARMode - model-viewer fills the viewport so it can render
+   the 3D preview and open the device camera for AR */
+.marker-viewer__host {
+  position: fixed;
+  inset: 0;
+  width: 100%;
+  height: 100%;
+  background: transparent;
+  --poster-color: transparent;
+}
+
+.marker-viewer__ar-btn {
+  position: fixed;
+  bottom: max(32px, env(safe-area-inset-bottom));
+  left: 50%;
+  transform: translateX(-50%);
+  z-index: 20;
+  padding: 16px 32px;
+  border: 0;
+  border-radius: 999px;
+  background: #fff;
+  color: #111;
+  font-size: 16px;
+  font-weight: 850;
+  cursor: pointer;
+  white-space: nowrap;
+  box-shadow: 0 4px 24px rgba(0, 0, 0, 0.4);
+}
